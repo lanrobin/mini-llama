@@ -1,0 +1,91 @@
+# ==========================================
+# Python Standard / Python 标准基础
+# ==========================================
+# Byte-compiled / 字节码文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / 编译与分发包
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ==========================================
+# Environments / 虚拟环境
+# ==========================================
+# Local isolation folders / WSL中常用的本地虚拟环境目录
+.venv/
+venv/
+ENV/
+env/
+
+# ==========================================
+# LLM & AI Specific / 大模型开发专项 (核心)
+# ==========================================
+# Large Model Weights / 模型权重文件 (防止上传几个GB的二进制文件)
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.gguf
+*.onnx
+
+# Local Model Cache / 本地模型缓存目录 (如下载的 HuggingFace 模型)
+hub/
+models/
+checkpoints/
+weights/
+
+# Vector Databases / 向量数据库本地存储 (如 FAISS, ChromaDB)
+*.index
+*.db
+vector_store/
+
+# Dataset Files / 数据集文件 (JSONL/CSV通常很大且包含隐私)
+data/
+dataset/
+*.csv
+*.jsonl
+
+# ==========================================
+# Security & Config / 安全与配置
+# ==========================================
+# Environment variables containing API Keys / 存放 API 密钥的环境变量文件
+.env
+.env.*
+secrets.toml
+auth.json
+
+# ==========================================
+# Editor & OS / 编辑器与系统
+# ==========================================
+# VS Code specific / VS Code 插件与配置
+.vscode/
+.history/
+*.code-workspace
+
+# WSL/Linux/Windows system files / 系统残留文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# Jupyter Notebook / 笔记本
+# ==========================================
+.ipynb_checkpoints/
+*.log
+logs/
