@@ -2,7 +2,9 @@ import logging
 import os
 import inspect
 
-class Logger:
+from utils.singleton import SingletonMeta
+
+class Logger(metaclass=SingletonMeta):
     def __init__(self, log_dir="~/llama_logs", log_name="llama.log", level=logging.INFO):
         """
         Initialize the Logger.
