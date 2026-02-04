@@ -34,7 +34,7 @@ class Sequence:
         self.last_token_id = token_id
         self.num_tokens += 1
 
-    def block(self, block_idx: int) -> list[int]:
+    def get_block_token_ids(self, block_idx: int) -> list[int]:
         assert 0 <= block_idx < self.num_blocks, f"Block index {block_idx} out of range for sequence with {self.num_blocks} blocks."
         start_idx = block_idx * Sequence.block_size
         end_idx = min(start_idx + Sequence.block_size, self.num_tokens)
