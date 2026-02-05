@@ -1,3 +1,4 @@
+import bisect
 import pickle
 from typing import override
 import torch
@@ -25,6 +26,7 @@ class ModelRunner(ABC):
         self.config = config
         hf_config = config.hf_config
         self.logger = Logger()
+        self.context_manager = ContextManager()
         self.logger.info("Initializing ModelRunner")
         self.block_size = config.kvcache_block_size
         self.enforced_eager = config.enforce_eager
@@ -74,6 +76,7 @@ class ModelRunner(ABC):
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
         logits = self.run_model(input_ids, positions, is_prefill)
         token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else []
+        self.context_manager.clear_default_context()
         return token_ids
 
     
@@ -147,7 +150,7 @@ class ModelRunner(ABC):
             slot_mapping=slot_mappings_tensor,
             block_tables=block_tables
         )
-        ContextManager().set_default_context(context)
+        self.context_manager.set_default_context(context)
         return input_ids_tensor, positions_tensor
     
     def prepare_decode(self, seqs: list[Sequence]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -172,7 +175,7 @@ class ModelRunner(ABC):
             slot_mapping=slot_mappings_tensor,
             context_lens=context_lens_tensor
         )
-        ContextManager().set_default_context(context)
+        self.context_manager.set_default_context(context)
         return input_ids_tensor, positions_tensor
 
     
@@ -191,7 +194,37 @@ class ModelRunner(ABC):
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
             self.logger.debug(f"Running model on rank {self.rank} with input_ids shape: {input_ids.shape} and positions shape: {positions.shape} in CUDA graph mode.")
-            return torch.empty()  # Placeholder for CUDA graph execution
+            bs = input_ids.size(0)
+            context = self.context_manager.get_default_context()
+            graph = self.graphs[self.get_good_graph_bs(bs)]
+            graph_vars = self.graph_vars
+            graph_vars["input_ids"][:bs].copy_(input_ids)
+            graph_vars["positions"][:bs].copy_(positions)
+            graph_vars["slot_mappings"].fill_(-1)
+            graph_vars["slot_mappings"][:bs].copy_(context.slot_mapping)
+            graph_vars["context_lens"][:bs].zero_()
+            graph_vars["context_lens"][:bs].copy_(context.context_lens)
+            graph_vars["block_tables"][:bs, :context.block_tables.size(1)].copy_(context.block_tables)
+            graph.replay()
+            return self.model.compute_logits(graph_vars["outputs"][:bs])
+    
+    def get_good_graph_bs(self, bs:int) -> int:
+        # O(N)
+        #return next(x for x in self.graph_bs if x >= bs)
+
+        # O(log(N))
+        # idx = bisect.bisect_left(self.graph_bs, bs)
+        # target_bs = self.graph_bs[idx]
+        # return target_bs
+
+        # O(1)
+        if bs <= 8:
+            # Optimized for 1,2,4,8
+            target_bs = 1 << (bs - 1).bit_length()
+        else:
+            # Optimized for 16,32,48,...,512
+            target_bs = ((bs + 15) // 16) * 16
+        return target_bs
     
     def prepare_sample(self, seqs: list[Sequence]) -> torch.Tensor:
         temperatures = [seq.temperature for seq in seqs]
@@ -231,8 +264,54 @@ class ModelRunner(ABC):
                 module.v_cache = self.kv_cache[1, layer_id]
                 layer_id += 1
 
+    @torch.inference_mode()
     def capture_cuda_graphs(self):
-        self.logger.error("CUDA graph capture not implemented. Please implement the capture_cuda_graphs method to capture CUDA graphs.")
+        hf_config = self.config.hf_config
+        # max batch size for CUDA graph capture, 512 is just an experience number for RTX3090
+        max_bs = min(self.config.max_num_seqs, self.CUDA_GRAPH_CAPTURE_SIZE)
+        max_num_blocks = (self.config.max_model_length + self.block_size - 1) // self.block_size
+        input_ids = torch.zeros(max_bs, dtype=torch.int64)
+        positions = torch.zeros(max_bs, dtype=torch.int64)
+        slot_mappings = torch.zeros(max_bs, dtype=torch.int32)
+        context_lens = torch.zeros(max_bs, dtype=torch.int32)
+        block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
+        outputs = torch.zeros(max_bs, hf_config.hidden_size)
+        self.graph_bs = [1,2,4,8] + list(range(16, max_bs+1, 16))
+        self.graphs = {}
+        self.graph_pool = None
+
+        for bs in reversed(self.graph_bs):
+            self.logger.info(f"Capturing CUDA graph for batch size {bs} on rank {self.rank}")
+            graph = torch.cuda.CUDAGraph()
+
+            context = Context(
+                is_prefill=False, # Only decode stage uses CUDA graph
+                cu_seqlens_q=None,
+                cu_seqlens_k=None,
+                max_seqlen_q=0,
+                max_seqlen_k=0,
+                slot_mapping=slot_mappings[:bs],
+                context_lens=context_lens[:bs],
+                block_tables=block_tables[:bs]
+            )
+            self.context_manager.set_default_context(context)
+            outputs[:bs] = self.run_model(input_ids[:bs], positions[:bs], is_prefill=False)
+            # graph_pool is None for the largest batch size graph, so it will create a new pool.
+            # and put it into graph.pool
+            with torch.cuda.graph(graph, self.graph_pool):
+                outputs[:bs] = self.run_model(input_ids[:bs], positions[:bs], is_prefill=False)
+            # If it is the first time creating the graph pool with largest batch size
+            # assign it and will reuse for the following smaller batch size graphs.
+            if self.graph_pool is None:
+                self.logger.info(f"Creating CUDA graph pool on rank {self.rank} as it does not exist.")
+                self.graph_pool = graph.pool()
+            self.graphs[bs] = graph
+            torch.cuda.synchronize()
+            self.context_manager.clear_default_context()
+
+        self.graph_vars = {"input_ids": input_ids, "positions": positions,
+                           "slot_mappings": slot_mappings, "context_lens": context_lens,
+                           "block_tables": block_tables, "outputs": outputs}
 
 
 class MasterModelRunner(ModelRunner):

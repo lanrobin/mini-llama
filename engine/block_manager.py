@@ -57,7 +57,7 @@ class BlockManager:
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, seq:Sequence) -> bool:
-        return len(self.free_block_ids) > seq.num_blocks
+        return len(self.free_block_ids) >= seq.num_blocks
     
     def allocate_blocks(self, seq:Sequence) -> bool:
 
@@ -125,6 +125,15 @@ class BlockManager:
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
     
     def may_append(self, seq:Sequence):
+        '''
+        This function is called in decode stage. In this stage, we only add one token at a time.
+        So we need to check if we need to allocate a new block or just append to the last block.
+        
+        :param self: Description
+        :param seq: Description
+        :type seq: Sequence
+        '''
+
         block_table = seq.block_table
 
         last_block = self.blocks[block_table[-1]]
