@@ -1,7 +1,11 @@
 import bisect
 import pickle
 from typing import override
+from glob import glob
+from safetensors import safe_open
+import os
 import torch
+from torch import nn
 from abc import ABC, abstractmethod
 import torch.distributed as dist
 from engine.sequence import Sequence
@@ -230,8 +234,35 @@ class ModelRunner(ABC):
         temperatures = [seq.temperature for seq in seqs]
         return torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
     
-    def load_model(self):
-        self.logger.error("Model loading not implemented. Please implement the load_model method to load model weights.")
+    def load_model(self, model:nn.Module, model_path:str):
+        packed_modules_mapping = getattr(model, "packed_modules_mapping", {})
+        '''
+        packed_modules_mapping = {
+        "q_proj": ("qkv_proj", "q"),
+        "k_proj": ("qkv_proj", "k"),
+        "v_proj": ("qkv_proj", "v"),
+        "gate_proj": ("gate_up_proj", 0),
+        "up_proj": ("gate_up_proj", 1),
+        }
+        '''
+        for file in glob(os.path.join(model_path, "*.safetensors")):
+            with safe_open(file, framework="pt", device="cpu") as f:
+                for weight_name in f.keys():
+                    if weight_name in packed_modules_mapping:
+                        module_name, shard_id = packed_modules_mapping[weight_name]
+                        module = getattr(model, module_name)
+                        param = getattr(module, shard_id)
+                        weight_tensor = f.get_parameter(weight_name)
+                        module.weight_loader(param, weight_tensor, loaded_shared_id=shard_id)
+                        self.logger.info(f"Loaded packed parameter {weight_name} into module {module_name} shard {shard_id} from file {file}")
+                    else:
+                        param = model
+                        for attr in weight_name.split('.'):
+                            param = getattr(param, attr)
+                        weight_tensor = f.get_parameter(weight_name)
+                        module.weight_loader(param, weight_tensor)
+                        self.logger.info(f"Loaded parameter {weight_name} from file {file}")
+        raise NotImplementedError("Model loading is implemented for safetensors format. Implement other formats if needed.")
 
     def warmup_model(self):
         torch.cuda.empty_cache()

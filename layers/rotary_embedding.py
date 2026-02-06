@@ -9,7 +9,7 @@ def apply_rotary_embedding(x: torch.Tensor, sin: torch.Tensor, cos: torch.Tensor
     return torch.cat([y1, y2], dim=-1).type_as(x)
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, head_size:int, rotary_dim: int, max_position: int = 2048, base: int = 10000):
+    def __init__(self, head_size:int, rotary_dim: int, max_position: int = 2048, base: float = 10000):
         super().__init__()
         assert rotary_dim == head_size, "Currently only full rotary embedding is supported."
         self.head_size = head_size
@@ -25,11 +25,15 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("cos", cos, persistent=False)
         self.register_buffer("sin", sin, persistent=False)
 
-    def forward(self, positions: torch.Tensor, query: torch.Tensor, key: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, query: torch.Tensor, key: torch.Tensor, positions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
        cos = self.cos[positions]
        sin = self.sin[positions]
        q = apply_rotary_embedding(query, sin, cos)
        k = apply_rotary_embedding(key, sin, cos)
        return q, k
 
-
+@lru_cache(maxsize=1)  
+def get_rope(head_size: int, rotary_dime: int, base:float, rope_scaling:tuple | None = None):
+    assert rope_scaling is not None, "Dynamic RoPE scaling is not supported yet."
+    rotary_embedding = RotaryEmbedding(head_size, rotary_dime, base=base)
+    return rotary_embedding
