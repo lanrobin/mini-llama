@@ -22,9 +22,9 @@ class LinearBase(nn.Module, ABC):
         self.logger = Logger()
 
     
-    @abstractmethod
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        pass
+        output = F.linear(input, self.weight, self.bias)
+        return output
 
 
 
@@ -40,10 +40,6 @@ class ReplicatedLinear(LinearBase):
         # In replicated linear, all ranks have the full weight matrix
         self.logger.info(f"Initialized ReplicatedLinear with input_size={input_size}, output_size={output_size}, bias={bias}")
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output = F.linear(input, self.weight, self.bias)
-        return output
-
     def weight_loader(self, param: nn.Parameter, weight_tensor: torch.Tensor):
         param.data.copy_(weight_tensor)
 
@@ -53,10 +49,6 @@ class ColumnParallelLinear(LinearBase):
         per_partition_output_size = LinearBase.divide(output_size, dist.get_world_size())
         super().__init__(input_size, per_partition_output_size, bias, tp_dim=0)
         self.logger.info(f"Initialized ColumnParallelLinear with input_size={input_size}, output_size={output_size}, bias={bias}")
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output = F.linear(input, self.weight, self.bias)
-        return output
 
     def weight_loader(self, param: nn.Parameter, weight_tensor: torch.Tensor):
         shard_size = param.data.size(self.tp_dim)
@@ -96,7 +88,7 @@ class QKVParallelLinear(ColumnParallelLinear):
     def weight_loader(self, param: nn.Parameter, weight_tensor: torch.Tensor, loaded_shard_id:str):
         assert loaded_shard_id in ["q","k","v"], "loaded_shard_id must be one of 'q_proj', 'k_proj' or 'v_proj'"
         if loaded_shard_id == 'q':
-            shard_size = self.num_kv_heads * self.head_size
+            shard_size = self.num_heads * self.head_size
             shard_offset = 0
         elif loaded_shard_id == 'k':
             shard_size = self.num_kv_heads * self.head_size
