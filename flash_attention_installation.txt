@@ -1,0 +1,6 @@
+If you have multiple Virtual Environments, and you have successfully install the flash attention in one of them, when you install in another venv, it will finished fast, but this just from cache.
+You may incur following error:
+.venv/lib/python3.12/site-packages/flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so: undefined symbol: _ZN3c104cuda29c10_cuda_check_implementationEiPKcS2_ib
+
+Please reinstall it with following commands.
+MAX_JOBS=6 pip install flash-attn --no-build-isolation --no-cache-dir --force-reinstall --ignore-installed

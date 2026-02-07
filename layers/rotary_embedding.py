@@ -6,7 +6,7 @@ def apply_rotary_embedding(x: torch.Tensor, sin: torch.Tensor, cos: torch.Tensor
     x1, x2 = torch.chunk(x.float(), 2, dim=-1)
     y1 = x1 * cos - x2 * sin
     y2 = x1 * sin + x2 * cos
-    return torch.cat([y1, y2], dim=-1).type_as(x)
+    return torch.cat([y1, y2], dim=-1).to(x.dtype)
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, head_size:int, rotary_dim: int, max_position_embeddings: int, base: float):
@@ -22,6 +22,14 @@ class RotaryEmbedding(nn.Module):
         freqs = torch.einsum('i , j -> i j', t, inv_freq)
         cos = freqs.cos()
         sin = freqs.sin()
+        
+        ''' This fixed: Exception has occurred: RuntimeError
+        The size of tensor a (24) must match the size of tensor b (16384) at non-singleton dimension 1.
+        As when multiplying: x1.shape=[16384, 24, 64] and cos.shape=[16384, 24].
+        After unsqueeze, cos.shape=[16384, 1, 24], which can be broadcasted to x1.shape. '''
+        cos.unsqueeze_(1)
+        sin.unsqueeze_(1)
+        
         self.register_buffer("cos", cos, persistent=False)
         self.register_buffer("sin", sin, persistent=False)
 

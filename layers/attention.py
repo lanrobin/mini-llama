@@ -5,6 +5,8 @@ import triton.language as tl
 
 from utils import Context, ContextManager, Logger
 
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+
 @triton.jit
 def store_kvcache_kernel(key_ptr,key_stride, value_ptr, value_stride, k_cache_ptr, v_cache_ptr, slot_mapping_ptr, D: tl.constexpr):
     idx = tl.program_id(0)
@@ -52,10 +54,18 @@ class Attention(nn.Module):
                 #self.logger.info("Using block tables for attention computation.")
                 # Implement block table based attention computation here
                 k,v = k_cache, v_cache
-            o = torch.empty_like(q)
+            o = flash_attn_varlen_func(q, k, v,
+                                       max_seqlen_q = context.max_seqlen_q,
+                                       cu_seqlens_q = context.cu_seqlens_q,
+                                       max_seqlen_k = context.max_seqlen_k,
+                                       cu_seqlens_k = context.cu_seqlens_k,
+                                       softmax_scale = self.scale,
+                                       causal=True,
+                                       block_table=context.block_tables)
             self.logger.error("Prefill mode with block tables is not implemented yet.")
         else: # decode mode
-            o = torch.empty_like(q)
+            unsuqeezed_q = q.unsqueeze(1)  # Add a sequence length dimension of 1 for the current token.
+            o = flash_attn_with_kvcache(unsuqeezed_q, k_cache, v_cache, cache_seqlens=context.context_lens, softmax_scale=self.scale, causal=True)
             self.logger.error("Decode mode attention computation is not implemented yet.")
             
         return o

@@ -203,6 +203,16 @@ class LlamaForCausalLM(nn.Module):
             hidden_size=config.hidden_size,
             bias=False
         )
+        '''
+        两行代码实现了一个经典的深度学习优化技术，称为 权重绑定（Weight Tying）。就是将语言模型的输出层（lm_head）的权重与输入嵌入层（model.embed_tokens）的权重共享。这种技术有几个好处：
+        1. 减少模型参数：通过共享权重，模型的总参数量减少了，这有助于降低内存占用和计算成本。
+        2. 提高泛化能力：权重绑定可以帮助模型更好地泛化，因为它强制模型在输入和输出之间学习相似的表示。这对于语言模型来说尤其有用，因为输入和输出通常是相同的词汇表。
+        3. 加速训练：共享权重可以加速训练过程，因为模型不需要学习两个独立的权重矩阵，而是只需要学习一个。这可以导致更快的收敛和更好的性能。
+        总的来说，这两行代码通过权重绑定技术优化了模型的参数效率和训练效率，同时也有助于提高模型的泛化能力。
+
+        如果 config 中的 tie_word_embeddings 设置为 False, 那么在模型初始化时，lm_head 的权重将不会与 embed_tokens 的权重共享。这意味着 lm_head 将拥有自己独立的权重矩阵，而不是使用 embed_tokens 的权重。
+        这可能会增加模型的参数量，但也允许 lm_head 学习与 embed_tokens 不同的表示，这在某些情况下可能是有益的。
+        '''
         if config.tie_word_embeddings:
             self.lm_head.weight.data.copy_(self.model.embed_tokens.weight.data)
 

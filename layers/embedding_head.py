@@ -133,7 +133,7 @@ class VocabParallelEmbeddingHead(nn.Module):
 class ParallelLMHead(VocabParallelEmbeddingHead):
     '''
     Parallel Language Model Head。
-    这个类做的事情与VocabParallelEmbeddingHead类似，都是在多个GPU上并行化处理词汇表。
+    
     '''
     def __init__(self, vocab_size: int, hidden_size: int, bias: bool = False):
         assert not bias, "Bias is not supported in ParallelLMHead."
