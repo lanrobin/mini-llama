@@ -1,0 +1,21 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/mini_llama.py",
+            //"program": "${workspaceFolder}/test.py",
+            "console": "integratedTerminal",
+            "env": {
+                "CUDA_LAUNCH_BLOCKING": "1", // 可选：如果要启用 CUDA 的同步错误检查
+                "TORCH_USE_CUDA_DSA": "1"  // 可选：如果要启用设备端断言（Device-side Assertions）
+            }
+        }
+    ]
+}
