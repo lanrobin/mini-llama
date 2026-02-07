@@ -23,7 +23,7 @@ class Scheduler:
         num_seqs = 0
         num_batched_tokens = 0
         while self.waiting and num_seqs < self.max_num_seqs:
-            seq = self.waiting.popleft()
+            seq = self.waiting[0]
             if (num_batched_tokens + seq.num_tokens > self.max_num_batched_tokens) or not self.block_manager.can_allocate(seq):
                self.logger.debug(f"Cannot schedule seq {seq.seq_id}: batched tokens {num_batched_tokens + seq.num_tokens}, available blocks {len(self.block_manager.free_block_ids)}, required blocks {seq.num_blocks}.")
                break
@@ -32,7 +32,7 @@ class Scheduler:
             self.block_manager.allocate_blocks(seq)
             num_batched_tokens += (seq.num_tokens - seq.num_cached_tokens)
             seq.state = SequenceState.RUNNING
-            self.waiting.remove(seq)
+            self.waiting.popleft()
             self.running.append(seq)
             scheduled_seqs.append(seq)
 

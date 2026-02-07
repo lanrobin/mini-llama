@@ -129,11 +129,11 @@ class ModelRunner(ABC):
             for i in range(seq.num_cached_blocks, seq.num_blocks):
                 start = seq.block_table[i] * Sequence.block_size
                 if i != seq.num_blocks - 1:
-                    end = start + seq.block_table[i] * Sequence.block_size
+                    end = start + Sequence.block_size
                 else:
                     end = start + seq.last_block_num_tokens
                 
-                slot_mappings.append(list(range(start, end)))
+                slot_mappings.extend(list(range(start, end)))
 
             if cu_seqlens_k[-1] > cu_seqlens_q[-1]:
                 block_tables = self.prepare_block_tables(seqs)
@@ -191,7 +191,7 @@ class ModelRunner(ABC):
     
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool) -> torch.Tensor:
-        if is_prefill and self.enforced_eager and input_ids.size(0) > self.CUDA_GRAPH_CAPTURE_SIZE:
+        if is_prefill or self.enforced_eager or input_ids.size(0) > self.CUDA_GRAPH_CAPTURE_SIZE:
             self.logger.debug(f"Running model eagerly on rank {self.rank} due to enforced eager mode with input_ids shape: {input_ids.shape} and positions shape: {positions.shape}")
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
@@ -247,7 +247,7 @@ class ModelRunner(ABC):
         hf_config = config.hf_config
         free, total = torch.cuda.mem_get_info()
         used = total - free
-        peak = torch.cuda.memory_stats()['alloc_bytes.all.peak']
+        peak = torch.cuda.memory_stats()['allocated_bytes.all.peak']
         current = torch.cuda.memory_stats()['allocated_bytes.all.current']
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         head_dim = getattr(hf_config, 'head_dim', hf_config.hidden_size // hf_config.num_attention_heads)

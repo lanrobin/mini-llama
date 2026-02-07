@@ -5,20 +5,23 @@ import triton.language as tl
 
 from utils import Context, ContextManager, Logger
 
-from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+# from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+
+# 在没有安装 flash-attn 的环境中，使用纯 PyTorch 实现的替代函数。这些函数的接口与 flash-attn 的函数保持一致，但性能较差，仅用于测试和调试。
+from .flash_attn_mock import flash_attn_varlen_func_shim as flash_attn_varlen_func
+from .flash_attn_mock import pytorch_paged_attention as flash_attn_with_kvcache
 
 @triton.jit
 def store_kvcache_kernel(key_ptr,key_stride, value_ptr, value_stride, k_cache_ptr, v_cache_ptr, slot_mapping_ptr, D: tl.constexpr):
     idx = tl.program_id(0)
     slot = tl.load(slot_mapping_ptr + idx)
     if slot == -1:
-        Logger().logger.error(f"Invalid slot mapping for index {idx}. Slot mapping must be non-negative.")
         return
-    key_offset = idx * key_stride + tl.arrange(0, D)
-    value_offset = idx * value_stride + tl.arrange(0, D)
+    key_offset = idx * key_stride + tl.arange(0, D)
+    value_offset = idx * value_stride + tl.arange(0, D)
     key = tl.load(key_ptr + key_offset)
     value = tl.load(value_ptr + value_offset)
-    cache_offset = slot * D + tl.arrange(0, D)
+    cache_offset = slot * D + tl.arange(0, D)
     tl.store(k_cache_ptr + cache_offset, key)
     tl.store(v_cache_ptr + cache_offset, value)
     
@@ -62,10 +65,8 @@ class Attention(nn.Module):
                                        softmax_scale = self.scale,
                                        causal=True,
                                        block_table=context.block_tables)
-            self.logger.error("Prefill mode with block tables is not implemented yet.")
         else: # decode mode
             unsuqeezed_q = q.unsqueeze(1)  # Add a sequence length dimension of 1 for the current token.
-            o = flash_attn_with_kvcache(unsuqeezed_q, k_cache, v_cache, cache_seqlens=context.context_lens, softmax_scale=self.scale, causal=True)
-            self.logger.error("Decode mode attention computation is not implemented yet.")
+            o = flash_attn_with_kvcache(unsuqeezed_q, k_cache, v_cache, cache_seqlens=context.context_lens, block_tables=context.block_tables, softmax_scale=self.scale, causal=True)
             
         return o

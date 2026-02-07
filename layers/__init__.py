@@ -18,5 +18,5 @@ __all__ = [
     "RotaryEmbedding",
     "get_rope",
     "Attention",
-    "SiluAndMultiply"
+    "SiluAndMultiply",
 ]
