@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 import torch.distributed as dist
 from engine.sequence import Sequence
 from layers import Sampler
-from models.llama3 import LlamaForCausalLM
+from llama import LlamaForCausalLM
 from utils import Logger, Config, Context, ContextManager, load_weights_from_safetensors
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
