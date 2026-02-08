@@ -15,9 +15,10 @@ def main():
 
     sampling_params = SamplingParams(temperature=0.7, max_tokens=256, ignore_eos=False)
 
-    prompt_texts = ["Can you help to sum up from 1 to 10?", 
-               "list all the prime numbers bweteen 1 and 100?",
-               "Can you write the first 20 digits of pi?"]
+    prompt_texts = ["can you help to sum up from 1 to 10?", 
+               # "list all the prime numbers bweteen 1 and 100?",
+               # "can you write the first 20 digits of pi?"
+               ]
     
     prompts = [
         tokenizer.apply_chat_template([{"role": "user", "content": text}], tokenize = False, add_generation_prompt=True)

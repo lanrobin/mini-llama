@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import torch
 
+from utils.log import Logger
 from utils.singleton import SingletonMeta
 
 @dataclass
@@ -19,9 +20,11 @@ class Context:
 class ContextManager(metaclass=SingletonMeta):
     def __init__(self):
         self.contexts = dict()
+        self.logger = Logger()
 
     def set_context(self, context_name: str, context: Context):
         self.contexts[context_name] = context
+        self.logger.info(f"Context '{context_name}' set.")
 
     def get_context(self, context_name: str) -> Context | None:
         return self.contexts.get(context_name, None)
@@ -29,6 +32,7 @@ class ContextManager(metaclass=SingletonMeta):
     def clear_context(self, context_name: str):
         if context_name in self.contexts:
             del self.contexts[context_name]
+            self.logger.info(f"Context '{context_name}' cleared.")
 
     def set_default_context(self, context: Context):
         self.set_context("default", context)

@@ -1,0 +1,21 @@
+# 1. 下载 NVIDIA 仓库的 Pin 文件（配置优先级）
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-wsl-ubuntu.pin
+sudo mv cuda-wsl-ubuntu.pin /etc/apt/preferences.d/cuda-repository-pin-600
+
+# 2. 下载 CUDA 12.8 的 WSL 专用安装包 (约 3GB)
+wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda-repo-wsl-ubuntu-12-8-local_12.8.0-1_amd64.deb
+
+# 3. 安装仓库包
+sudo dpkg -i cuda-repo-wsl-ubuntu-12-8-local_12.8.0-1_amd64.deb
+
+# 4. 复制 Keyring (这是新版安装包的关键步骤，不配会报错)
+sudo cp /var/cuda-repo-wsl-ubuntu-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/
+
+# 5. 更新 apt 缓存
+sudo apt-get update
+
+# 6. 【关键】只安装 Toolkit，不安装驱动
+# 注意：千万不要用 "sudo apt-get install cuda"，那会试图安装驱动！
+sudo apt-get -y install cuda-toolkit-12-8
+
+

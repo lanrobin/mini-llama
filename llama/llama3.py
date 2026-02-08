@@ -100,12 +100,12 @@ class Llama32DecoderLayer(nn.Module):
                     # "model.norm.weight": "model-00002-of-00002.safetensors"
                     }
     '''
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig, layer_id: int):
         super().__init__()
         self.logger = Logger()
         assert config is not None, "LlamaConfig must be provided."
         self.config = config
-        # Define layer components here (e.g., attention, feed-forward, etc.)
+        self.layer_id = layer_id
         self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
 
@@ -132,10 +132,14 @@ class Llama32DecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
             
-        hidden_states = self.self_attn(hidden_states, positions)
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
-        return hidden_states, residual
+        hidden_states_1 = self.self_attn(hidden_states, positions)
+        hidden_states_2, residual = self.post_attention_layernorm(hidden_states_1, residual)
+        hidden_states_3 = self.mlp(hidden_states_2)
+        
+        if self.layer_id == 0:
+            self.logger.info(f"After first layer, hidden_states_1 shape: {hidden_states_1.shape}, hidden_states_2 shape: {hidden_states_2.shape}, hidden_states_3 shape: {hidden_states_3.shape}")  
+        
+        return hidden_states_3, residual
 
 
 class Llama32Model(nn.Module):
@@ -165,7 +169,7 @@ class Llama32Model(nn.Module):
             vocab_size=config.vocab_size,
             hidden_size=config.hidden_size)
         
-        self.layers = nn.ModuleList([Llama32DecoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([Llama32DecoderLayer(config, layer_id=layer_id) for layer_id in range(config.num_hidden_layers)])
 
         self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         self.logger.info(f"Llama32Model initialized with {config.num_hidden_layers} layers. rms_norm_eps={config.rms_norm_eps}")
