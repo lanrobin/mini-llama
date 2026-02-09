@@ -136,8 +136,8 @@ class Llama32DecoderLayer(nn.Module):
         hidden_states_2, residual = self.post_attention_layernorm(hidden_states_1, residual)
         hidden_states_3 = self.mlp(hidden_states_2)
         
-        if self.layer_id == 0:
-            self.logger.info(f"After first layer, hidden_states_1 shape: {hidden_states_1.shape}, hidden_states_2 shape: {hidden_states_2.shape}, hidden_states_3 shape: {hidden_states_3.shape}")  
+        #if self.layer_id == 0:
+        #    self.logger.info(f"After first layer, hidden_states_1 shape: {hidden_states_1.shape}, hidden_states_2 shape: {hidden_states_2.shape}, hidden_states_3 shape: {hidden_states_3.shape}")  
         
         return hidden_states_3, residual
 
@@ -218,7 +218,7 @@ class LlamaForCausalLM(nn.Module):
         这可能会增加模型的参数量，但也允许 lm_head 学习与 embed_tokens 不同的表示，这在某些情况下可能是有益的。
         '''
         if config.tie_word_embeddings:
-            self.lm_head.weight.data.copy_(self.model.embed_tokens.weight.data)
+            self.lm_head.weight.data= self.model.embed_tokens.weight.data
 
 
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:

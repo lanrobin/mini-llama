@@ -10,8 +10,8 @@ pipe = pipeline(
     device_map="auto",
 )
 messages = [
-    {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
-    {"role": "user", "content": "Who are you?"},
+    #{"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
+    {"role": "user", "content": "can you help to sum up from 1 to 10?"},
 ]
 outputs = pipe(
     messages,
