@@ -1,4 +1,4 @@
-The purpose of this repo is a full documented LLM project which copy from nano-vllm but replace the engine from QWEN to LLAMA.
+The purpose of this repo is a full documented LLM project which copied from nano-vllm but replace the engine from QWEN to LLAMA.
 
 Install flash-attention
 
