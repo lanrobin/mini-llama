@@ -74,5 +74,37 @@ python3 mini-llama/mini-llama.py
 
 ＃ 配置VSCode浏览代码
 
+1. 在Windows里安装VSCode之后，安装WSL, Python插件，在左下角的 ><解析选择打开 "Open a Remote Window".
+2. 选择你的WSL。
+![select-wsl-distro](res/select-wsl-distro.png)
+3. 打开你的clone代码的目录 ~/mini-llama，选择打开mini_llama.py文件。然后从菜单选择 "Run" -> "Add Configuration ..." 把下面的代码贴到launch.json里:
+![open_add_config](res/add-debugger-config.png)
+```
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/mini-llama/mini_llama.py",
+            //"program": "${workspaceFolder}/mini-llama/test.py",
+            "console": "integratedTerminal",
+            "env": {
+                "CUDA_LAUNCH_BLOCKING": "1", // 可选：如果要启用 CUDA 的同步错误检查
+                "TORCH_USE_CUDA_DSA": "1"  // 可选：如果要启用设备端断言（Device-side Assertions）
+            }
+        }
+    ]
+}
+```
+4. 保存，在mini_llama.py中左侧边栏打一个断点，从菜单选择 “RUN” -> "Start Debugging" 或者直接按F5。
+![start_debug](res/break-point-start-debug.png)
+5. 代码跑一会就停在断点上了，然后就可以单步调试了。
+![break_point_hit](res/debug-break-point.png)
 
 ＃ 使用flash-attn
