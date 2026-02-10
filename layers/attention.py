@@ -5,7 +5,11 @@ import triton.language as tl
 
 from utils import Context, ContextManager, Logger
 
-from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+# 原始高性能实现（需要安装 flash-attn）:
+# from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+
+# 纯 PyTorch 实现，便于理解逻辑:
+from layers.flash_attn_mock import flash_attn_varlen_func, flash_attn_with_kvcache
 
 @triton.jit
 def store_kvcache_kernel(key_ptr,key_stride, value_ptr, value_stride, k_cache_ptr, v_cache_ptr, slot_mapping_ptr, D: tl.constexpr):
@@ -20,6 +24,16 @@ def store_kvcache_kernel(key_ptr,key_stride, value_ptr, value_stride, k_cache_pt
     cache_offset = slot * D + tl.arange(0, D)
     tl.store(k_cache_ptr + cache_offset, key)
     tl.store(v_cache_ptr + cache_offset, value)
+    
+def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
+    N, num_heads, head_dim = key.shape
+    D = num_heads * head_dim
+    assert key.stride(-1) == 1 and value.stride(-1) == 1, "Key and value tensors must be contiguous in the last dimension"
+    assert key.stride(1) == head_dim and value.stride(1) == head_dim, "Key and value tensors must have the correct stride for the last dimension"
+    assert v_cache.stride(1) == D and k_cache.stride(1) == D, "Cache tensors must have the correct stride for the last dimension"
+    assert slot_mapping.numel() == N, "Slot mapping must have the same number of elements as the batch size"
+    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+
     
 def store_kvcache_slow(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
     """
@@ -42,24 +56,28 @@ def store_kvcache_slow(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Te
     """
     N, num_heads, head_dim = key.shape
 
+    # k_cache 可能是 4D: [num_blocks, block_size, num_heads, head_dim]
+    # slot 是全局索引，需要拆分为 (block_idx, block_offset)
+    if k_cache.dim() == 4:
+        block_size = k_cache.shape[1]
+    else:
+        block_size = None
+
     for idx in range(N):
         slot = slot_mapping[idx].item()
         if slot == -1:
             # Triton 版本中: if slot == -1: return（跳过该 token）
             continue
-        # key[idx] 的 shape 是 [num_heads, head_dim]，与 k_cache[slot] 的 shape 一致
-        # Triton 版本中把它当作扁平的 D=num_heads*head_dim 连续内存来读写，效果相同
-        k_cache[slot] = key[idx]
-        v_cache[slot] = value[idx]
-
-def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
-    N, num_heads, head_dim = key.shape
-    D = num_heads * head_dim
-    assert key.stride(-1) == 1 and value.stride(-1) == 1, "Key and value tensors must be contiguous in the last dimension"
-    assert key.stride(1) == head_dim and value.stride(1) == head_dim, "Key and value tensors must have the correct stride for the last dimension"
-    assert v_cache.stride(1) == D and k_cache.stride(1) == D, "Cache tensors must have the correct stride for the last dimension"
-    assert slot_mapping.numel() == N, "Slot mapping must have the same number of elements as the batch size"
-    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+        if block_size is not None:
+            # 4D cache: 将全局 slot 拆分为 block 索引和 block 内偏移
+            block_idx = slot // block_size
+            block_offset = slot % block_size
+            k_cache[block_idx, block_offset] = key[idx]
+            v_cache[block_idx, block_offset] = value[idx]
+        else:
+            # 2D cache: 直接用 slot 索引
+            k_cache[slot] = key[idx]
+            v_cache[slot] = value[idx]
 
 class Attention(nn.Module):
     def __init__(self, num_heads: int, head_dim: int, scale: float, num_kv_heads: int):
@@ -78,6 +96,7 @@ class Attention(nn.Module):
         k_cache = self.k_cache
         v_cache = self.v_cache
         if k_cache.numel() > 0 and v_cache.numel() > 0:
+            # self.logger.info(f"slot_mapping max:{context.slot_mapping.max().item()} min:{context.slot_mapping.min().item()}, k_cache shape: {k_cache.shape}, v_cache shape: {v_cache.shape}")
             store_kvcache_slow(k, v, k_cache, v_cache, context.slot_mapping)
             # store_kvcache_pytorch(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:

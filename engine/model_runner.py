@@ -77,8 +77,8 @@ class ModelRunner(ABC):
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
         logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = self.sampler(logits, temperatures, pick_max=True).tolist() if self.rank == 0 else []
-        #token_ids = self.sampler(logits, temperatures, pick_max=False).tolist() if self.rank == 0 else []
+        #token_ids = self.sampler(logits, temperatures, pick_max=True).tolist() if self.rank == 0 else []
+        token_ids = self.sampler(logits, temperatures, pick_max=False).tolist() if self.rank == 0 else []
         self.context_manager.clear_default_context()
         return token_ids
 

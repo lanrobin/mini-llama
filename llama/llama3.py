@@ -106,6 +106,7 @@ class Llama32DecoderLayer(nn.Module):
         assert config is not None, "LlamaConfig must be provided."
         self.config = config
         self.layer_id = layer_id
+        self.logger.info(f">>>>>>>>>>>>>>>>======Llama32DecoderLayer {layer_id} with hidden_size={config.hidden_size}, intermediate_size={config.intermediate_size}, num_attention_heads={config.num_attention_heads}, num_key_value_heads={config.num_key_value_heads}, head_dim={config.head_dim}, rms_norm_eps={config.rms_norm_eps}")
         self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
 
@@ -125,6 +126,7 @@ class Llama32DecoderLayer(nn.Module):
 
         self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         # More components would be defined here
+        self.logger.info(f"<<<<<<<<<<<<<<<==========Llama32DecoderLayer {layer_id} initialized.")
 
     def forward(self, positions: torch.Tensor, hidden_states: torch.Tensor, residual: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if residual is None:
