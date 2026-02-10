@@ -13,8 +13,8 @@
             //"program": "${workspaceFolder}/mini-llama/test.py",
             "console": "integratedTerminal",
             "env": {
-                "CUDA_LAUNCH_BLOCKING": "1", // 可选：如果要启用 CUDA 的同步错误检查
-                "TORCH_USE_CUDA_DSA": "1"  // 可选：如果要启用设备端断言（Device-side Assertions）
+                "CUDA_LAUNCH_BLOCKING": "1", //Optional: Enable CUDA's synchronous error checking | 可选：启用CUDA的同步错误检查
+                "TORCH_USE_CUDA_DSA": "1"  // Optional: Enable Device-side Assertions | 可选：如果要启用设备端断言（Device-side Assertions）
             }
         }
     ]
