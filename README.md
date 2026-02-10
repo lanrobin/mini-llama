@@ -1,5 +1,78 @@
-The purpose of this repo is a full documented LLM project which copied from nano-vllm but replace the engine from QWEN to LLAMA.
+#开篇简介
 
-Install flash-attention
+这个项目是模仿[nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)，基于[Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)实现的LLM项目，主要是为了学习为目的，所以进行了以下三点更改：
 
-MAX_JOBS=2 pip install flash-attn --no-build-isolation
+1. 通过pytorch实现flash_attn_varlen_func, flash_attn_with_kvcache两个函数，便于理解attention的运算本质。当然也以通过安装flash_attn来运行，后面会有
+2. 重新实现简单版的store_kvcache，便于理解。
+3. 基于作者本人的理解，增加了大量注释，为不是机器学习科班出生的工程师了解LLM项目降低难度。
+
+
+#运行环境
+
+[WSL version2 + Ubuntu 24.04](https://learn.microsoft.com/en-us/windows/wsl/install) + RTX 3090 Ti (24GB) + Pytorch[2.10.0+cu128] , 如果你的显存少于12G，也可以用[Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct)来跑，只是没那么智能，对于项目的理解没有任何障碍。
+
+直接在裸机上安装Linux应该也是能运行的，只是安装NVIDIA的驱动稍微麻烦点，所以我没有试。
+
+在Windows + WSL v2上，只要在Windows上安装最新的Nvidia驱动，WSL里的Linux就会自动通过GPU的半虚拟化技术直接使用Windows的NVIDIA驱动，而不需要单独为WSL里的Linux安装驱动，如下2图所示：
+
+![Windows驱动](res/windows-nvidia-driver.png)
+
+![Linux驱动](res/linux-nvidia-driver.png)
+
+#安装软件
+
+系统环境设置好之后，需要安装必要的软件：
+
+```
+sudo apt update
+sudo apt install git build-essential python3.12-venv python3-dev
+
+```
+
+安装完成后，创建一个文件夹，准备下载Llama模型。
+
+```
+mkdir mini-llama
+cd mini-llama
+python3 -m venv .venv
+source .venv/bin/activate
+pip3 install -U "huggingface_hub[cli]"
+```
+如下图所示：
+![venv setup](res/venv-setup.png)
+
+有了huggingface的cli之后，去huggingface注册，申请[token](https://huggingface.co/settings/tokens),拿到token后，用hf登录：
+
+```
+hf auth login --token YOUR_TOKEN_FROM_HF
+```
+![hf_login](res/hf_login_token.png)
+
+到这一步，就可clone代码了。同时去huggingface.co里申请一下[Llama模型的使用协议](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct/tree/main)。 最后执行llama3-2_3B.sh下载模型。
+```
+git clone https://github.com/lanrobin/mini-llama.git
+
+./mini-llama/llama3-2_3B.sh
+
+```
+
+下载完成后，应该是这样的目录结构：
+
+![llama-3.2-3b](res/llama-3.2-3b.png)
+
+最后再安装必要的python软件包就可以运行了。
+
+```
+pip3 install -r mini-llama/requirements.txt
+
+python3 mini-llama/mini-llama.py
+```
+开始运行：
+![run-llama-begin](res/run-mini-llama-1.png)
+经过一段时间和打一大堆日志后，运行出结果：
+![run-llama-end](res/run-mini-llama-2.png)
+
+＃ 配置VSCode浏览代码
+
+
+＃ 使用flash-attn
