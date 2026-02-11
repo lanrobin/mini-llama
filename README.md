@@ -162,4 +162,13 @@ python3 -c "import torch; print(torch.__version__)"
 
 2.10.0+cu128
 ```
-然后再跑安装flash-attn的脚本。
+然后再跑安装flash-attn的脚本。这需要比较长的时间，取决你的机器的配置，等着看到flash_attn安装成功的信息：
+![flash_attn_installed](res/flash-attn-finished.png)
+然后到layeres/attention.py 把flash_attn_mock注释掉，再运行就是用的flash attention了。
+```
+# 原始高性能实现（需要安装 flash-attn）:
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+
+# 纯 PyTorch 实现，便于理解逻辑:
+#from layers.flash_attn_mock import flash_attn_varlen_func, flash_attn_with_kvcache
+```

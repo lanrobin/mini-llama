@@ -6,7 +6,7 @@ from utils.sampling_params import SamplingParams
 
 def main():
     logger = Logger()
-    model_path = os.path.expanduser('~/huggingface/Llama-3.1-8B-Instruct')
+    model_path = os.path.expanduser('~/huggingface/Llama-3.2-3B-Instruct')
     logger.info(f"Loading model from {model_path}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)

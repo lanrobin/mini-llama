@@ -6,10 +6,10 @@ import triton.language as tl
 from utils import Context, ContextManager, Logger
 
 # 原始高性能实现（需要安装 flash-attn）:
-# from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 # 纯 PyTorch 实现，便于理解逻辑:
-from layers.flash_attn_mock import flash_attn_varlen_func, flash_attn_with_kvcache
+#from layers.flash_attn_mock import flash_attn_varlen_func, flash_attn_with_kvcache
 
 @triton.jit
 def store_kvcache_kernel(key_ptr,key_stride, value_ptr, value_stride, k_cache_ptr, v_cache_ptr, slot_mapping_ptr, D: tl.constexpr):
