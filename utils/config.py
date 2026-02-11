@@ -9,7 +9,7 @@ class Config:
     max_num_batched_tokens:int = 16384
     max_num_seqs:int = CONST.MAX_NUM_SEQS
     max_model_length:int = 4096
-    gpu_memory_utilization:float = 0.9
+    gpu_memory_utilization:float = 0.99
     tensor_parallel_size:int = 1
     enforce_eager:bool = False
     hf_config:LlamaConfig | None = None
