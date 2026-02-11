@@ -108,3 +108,58 @@ python3 mini-llama/mini-llama.py
 ![break_point_hit](res/debug-break-point.png)
 
 ＃ 使用flash-attn
+
+1. 先安装cuda toolkit 12.8.
+```
+# 1. 下载 NVIDIA 仓库的 Pin 文件（配置优先级）
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-wsl-ubuntu.pin
+sudo mv cuda-wsl-ubuntu.pin /etc/apt/preferences.d/cuda-repository-pin-600
+
+# 2. 下载 CUDA 12.8 的 WSL 专用安装包 (约 3GB)
+wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda-repo-wsl-ubuntu-12-8-local_12.8.0-1_amd64.deb
+
+# 3. 安装仓库包
+sudo dpkg -i cuda-repo-wsl-ubuntu-12-8-local_12.8.0-1_amd64.deb
+
+# 4. 复制 Keyring (这是新版安装包的关键步骤，不配会报错)
+sudo cp /var/cuda-repo-wsl-ubuntu-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/
+
+# 5. 更新 apt 缓存
+sudo apt-get update
+
+# 6. 【关键】只安装 Toolkit，不安装驱动
+# 注意：千万不要用 "sudo apt-get install cuda"，那会试图安装驱动！
+sudo apt-get -y install cuda-toolkit-12-8
+```
+
+2. 安装完成cuda toolkit 12.8之后，就是要安装flash-attn了。这个时间比较久，
+```
+# 只为 RTX 30 系列 (Ampere) 编译
+# 计算能力列表可以参考 NVIDIA 官方文档：https://developer.nvidia.com/cuda-gpus
+#export TORCH_CUDA_ARCH_LIST="8.6"
+export CUDA_HOME=/usr/local/cuda-12.8
+
+# RTX 50 系列 (Ada) 编译
+export TORCH_CUDA_ARCH_LIST="12.0"
+
+# 限制并发进程数以防爆内存
+# 这个数据可以根据你的系统内存和 CPU 核心数进行调整。
+# 32GB 内存的系统建议设置为 4-6，64GB 内存的系统可以设置为 8-12。
+export MAX_JOBS=8
+
+# 开始安装
+pip3 install flash-attn --no-build-isolation --no-cache-dir --force-reinstall --ignore-installed
+```
+如果在安装过程中出现下面的错误，请卸载不对的pytorch版本。
+![flash_attn](res/flash-attn-error.png)
+
+```
+pip3 uninstall torch torchvision torchaudio
+
+pip3 install -r mini-llama/requirements.txt
+
+python3 -c "import torch; print(torch.__version__)"
+
+2.10.0+cu128
+```
+然后再跑安装flash-attn的脚本。
