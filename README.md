@@ -171,4 +171,6 @@ from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 # 纯 PyTorch 实现，便于理解逻辑:
 #from layers.flash_attn_mock import flash_attn_varlen_func, flash_attn_with_kvcache
+
+python3 mini-llama/mini_llama.py
 ```
