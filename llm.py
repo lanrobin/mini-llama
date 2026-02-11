@@ -1,5 +1,5 @@
 from engine import LLMEngine
-from utils import SamplingParams, Logger
+from utils import SamplingParams
 
 class LLM(LLMEngine):
     def __init__(self, model_path: str, **kwargs):

@@ -13,7 +13,7 @@ def main():
 
     llm = LLM(model_path=model_path, enforce_eager=True, tensor_parallel_size=1)
 
-    sampling_params = SamplingParams(temperature=0.7, max_tokens=256, ignore_eos=False)
+    sampling_params = SamplingParams(temperature=0.7, max_tokens=1024, ignore_eos=False)
 
     prompt_texts = ["can you help to sum up from 1 to 10?", 
                "list all the prime numbers bweteen 1 and 100?",
