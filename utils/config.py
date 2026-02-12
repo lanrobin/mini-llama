@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from transformers import LlamaConfig
 from . import constants as CONST
 
@@ -13,7 +13,7 @@ class Config:
     tensor_parallel_size:int = 1
     enforce_eager:bool = False
     hf_config:LlamaConfig | None = None
-    eos_token_id:int = -1
+    eos_token_ids:set[int] = field(default_factory=set)
     kvcache_block_size:int = CONST.DEFAULT_KV_CACHE_BLOCK_SIZE
     num_kvcache_blocks:int = -1
 

@@ -51,11 +51,11 @@ class Sequence:
     
     def __getstate__(self) -> tuple:
         return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,
-                self.token_ids if self.num_completion_tokens == 0 else self.last_token_id)
+                self.token_ids if self.num_completed_tokens == 0 else self.last_token_id)
     
     def __setstate__(self, state: tuple):
         self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table = state[:-1]
-        if self.num_completion_tokens == 0:
+        if self.num_completed_tokens == 0:
             self.token_ids = state[-1]
         else:
             self.last_token_id = state[-1]
@@ -91,5 +91,5 @@ class Sequence:
         return self.num_tokens - (self.num_blocks - 1) * Sequence.block_size
   
     @property
-    def num_completion_tokens(self) -> int:
+    def num_completed_tokens(self) -> int:
         return self.num_tokens - self.num_prompt_tokens

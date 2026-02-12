@@ -9,7 +9,7 @@ class Scheduler:
         self.logger = Logger()
         self.max_num_seqs = config.max_num_seqs
         self.max_num_batched_tokens = config.max_num_batched_tokens
-        self.end_of_sequence_token_id = config.eos_token_id
+        self.end_of_sequence_token_ids = config.eos_token_ids
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
@@ -31,6 +31,7 @@ class Scheduler:
         This is the "writing" phase. The model generates the response one token at a time. And this newly generated token can be used as part of the input for generating the next token,
         which is called auto-regressive decoding until reaching the end of sequence token or max completion tokens.
         '''
+        # prefill stage
         scheduled_seqs = []
         num_seqs = 0
         num_batched_tokens = 0
@@ -55,10 +56,12 @@ class Scheduler:
         # decode stage.
         while self.running and num_seqs < self.max_num_seqs:
             seq = self.running.popleft()
-            # If there is not enough blocks for the new token, we need to preempt some sequences to free blocks until there are enough blocks for the new token.
-            # If we can not preempt any sequence, we have to preempt the current sequence itself and break the loop.
-            # When comes here, the newly generated token has been added to the sequence, so seq.num_tokens has been updated.
-            # So we need the call the may_append function to check if we need to allocate a new block for the new token and update the block table accordingly.
+            '''
+            If there is not enough blocks for the new token, we need to preempt some sequences to free blocks until there are enough blocks for the new token.
+            If we can not preempt any sequence, we have to preempt the current sequence itself and break the loop.
+            When comes here, the newly generated token has been added to the sequence, so seq.num_tokens has been updated.
+            So we need the call the may_append function to check if we need to allocate a new block for the new token and update the block table accordingly.
+            '''
             while not self.block_manager.can_append(seq):
                 self.logger.debug(f"Preempting seq {seq.seq_id} due to insufficient blocks.")
                 if self.running:
@@ -99,7 +102,7 @@ class Scheduler:
         Check if the sequences are finished after appending the newly generated token. If a sequence is finished, we free its blocks and remove it from running sequences.
         There are two conditions for a sequence to be finished: 
         1) the newly generated token is the end of sequence token and the sequence is not set to ignore eos;
-        2) the number of completion tokens reaches the max tokens.
+        2) the number of completed tokens reaches the max tokens.
         '''
         if len(seqs) != len(token_ids):
             self.logger.warning(f"Number of sequences {len(seqs)} does not match number of token IDs {len(token_ids)}.")
@@ -107,7 +110,7 @@ class Scheduler:
         finished_flags = {}
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
-            if (not seq.ignore_eos and token_id == self.end_of_sequence_token_id) or (seq.num_completion_tokens == seq.max_tokens):
+            if (not seq.ignore_eos and token_id in self.end_of_sequence_token_ids) or (seq.num_completed_tokens == seq.max_tokens):
                 seq.state = SequenceState.FINISHED
                 self.block_manager.free_blocks(seq)
                 self.running.remove(seq)
