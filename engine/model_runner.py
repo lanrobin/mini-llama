@@ -15,8 +15,15 @@ from multiprocessing.shared_memory import SharedMemory
 
 
 class ModelRunner(ABC):
-
-    '''Slots for CUDA graph capture'''
+    '''
+    Abstract base class for model runners. This class provides the common interface and functionality for both master and slave model runners.
+    
+    MasterModelRunner will handle the communication with the scheduler and write commands to shared memory for SlaveModelRunners to read and execute and also execute the commands locally.
+    Then it will collect all the result from SlaveModelRunners and return the final result to the scheduler.
+    
+    SlaveModelRunner will wait for the master to write commands to shared memory, read the commands, execute them and write the results back to shared memory for the master to read.
+    '''
+    #Slots for CUDA graph capture
     CUDA_GRAPH_CAPTURE_SIZE = 512
 
     shared_memory_name = "mini_llm_model_shm"
@@ -65,14 +72,6 @@ class ModelRunner(ABC):
         '''
         This is the default run method that both Master and Slave ModelRunners use to process sequences.
         Besides this, the MasterModelRunner will write this method to shared memory for SlaveModelRunners to read and execute.
-        
-        :param self: Description
-        :param seqs: Description
-        :type seqs: list[Sequence]
-        :param is_prefill: Description
-        :type is_prefill: bool
-        :return: Description
-        :rtype: list[int]
         '''
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
@@ -384,6 +383,10 @@ class SlaveModelRunner(ModelRunner):
 
 
     def loop(self):
+        '''
+        Slave rank will wait for the master to write commands to shared memory and execute them.
+        If exit command is received, it will break the loop and exit.
+        '''
         self.logger.info(f"Slave rank {self.rank} entering wait loop.")
         while True:
             method_name, args = self.read_shared_memory()

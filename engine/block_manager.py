@@ -41,15 +41,21 @@ class BlockManager:
         h.update(np.array(token_ids, dtype=np.int32).tobytes())
         return h.intdigest()
     
-    def _allocate_block(self, block_id:int) -> Block:
+    def _allocate_block(self) -> int:
+        '''
+        Allocate a block and return its id. This function will remove the block id from free_block_ids and add it to used_block_ids.
+        '''
+        block_id = self.free_block_ids.popleft()
         block = self.blocks[block_id]
         assert block.ref_count == 0, f"Trying to allocate a used block: {block_id}"
         block.reset()
-        self.free_block_ids.remove(block_id)
         self.used_block_ids.add(block_id)
-        return block
+        return block_id
     
     def _free_block(self, block_id:int):
+        '''
+        Free a block and return it to the pool of free blocks. This function will remove the block id from used_block_ids and add it to free_block_ids.
+        '''
         block = self.blocks[block_id]
         assert block.ref_count == 0, f"Trying to free a used block: {block_id}"
         #block.reset()
@@ -57,10 +63,23 @@ class BlockManager:
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, seq:Sequence) -> bool:
+        '''
+        Check if there are enough free blocks to allocate for the sequence.
+        This function is called in prefill stage, where we need to allocate all blocks for the sequence.
+        So we need to check if there are enough free blocks for the whole sequence.
+        '''
         return len(self.free_block_ids) >= seq.num_blocks
     
     def allocate_blocks(self, seq:Sequence) -> bool:
-
+        '''
+        Allocate blocks for the sequence. This function is called in prefill stage, where we need to allocate all blocks for the sequence.
+        So we need to allocate blocks for the whole sequence.
+        
+        Firstly, we will check if we can share blocks with existing sequences in the cache. Very block has a hash value (64bit int),
+        if the hash is same, then we will compare the token ids to make sure they are the same block. If there is a cache hit, we will share this block and increase its reference count. 
+        
+        If there is a cache miss, we will allocate a new block for this block and update the hash table.
+        '''
         assert not seq.block_table, "Blocks have already been allocated for this sequence."
 
         if not self.can_allocate(seq):
@@ -81,8 +100,7 @@ class BlockManager:
 
             if cache_miss:
                 # allocate a new block
-                block_id = self.free_block_ids[0]
-                block = self._allocate_block(block_id)
+                block_id = self._allocate_block()
             else:
                seq.num_cached_tokens += self.block_size
 
@@ -90,7 +108,9 @@ class BlockManager:
                    block = self.blocks[block_id]
                    block.ref_count += 1
                else:
-                   block = self._allocate_block(block_id)
+                   # Should not happen, because if there is a cache hit, the block should be in used_block_ids.
+                   self.logger.error(f"Cache hit but block {block_id} is not in used_block_ids.")
+                   block_id = self._allocate_block()
 
                if hash != -1:
                    block.update(token_ids, hash)
@@ -101,10 +121,16 @@ class BlockManager:
         return True
     
     def free_blocks(self, seq:Sequence):
+        '''
+        Free blocks for the sequence. This function is called when a sequence is finished or preempted.
+        We free the block in reverse order, so that we can update the hash table correctly.
+        If the block is shared by multiple sequences, we will decrease its reference count and only free it when the reference count reaches zero.
+        '''
         assert seq.block_table is not None, "Blocks have not been allocated for this sequence."
 
         for block_id in reversed(seq.block_table):
             block = self.blocks[block_id]
+            assert block.ref_count > 0, f"Trying to free a block with non-positive ref count: {block_id}"
             block.ref_count -= 1
             if block.ref_count == 0:
                 self._free_block(block_id)
@@ -114,37 +140,26 @@ class BlockManager:
     def can_append(self, seq:Sequence) -> bool:
         '''
         After prefill, we only add one token at a time. So we need to check if there is at least one free block.
-        So that when the current block is full, we can allocate a new block for the new token.
+        So that when the last block is full, we can allocate a new block for the new token.
         That num_tokens % block_size == 1 means the current block is full and we need a new block.
-        :param self: Description
-        :param seq: Description
-        :type seq: Sequence
-        :return: Description
-        :rtype: bool
         '''
-        return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
+        return len(self.free_block_ids) >= (seq.num_tokens % self.block_size == 1)
     
     def may_append(self, seq:Sequence):
         '''
         This function is called in decode stage. In this stage, we only add one token at a time.
         So we need to check if we need to allocate a new block or just append to the last block.
-        
-        :param self: Description
-        :param seq: Description
-        :type seq: Sequence
         '''
-
         block_table = seq.block_table
 
         last_block = self.blocks[block_table[-1]]
 
-        if len(seq) % self.block_size == 1:
+        if seq.num_tokens % self.block_size == 1:
             # We are ready to allocate a new block
             assert last_block.hash != -1, "Last block should be full when allocating a new block."
-            new_block_id = self.free_block_ids[0]
-            new_block = self._allocate_block(new_block_id)
+            new_block_id = self._allocate_block()
             block_table.append(new_block_id)
-        elif len(seq) % self.block_size == 0:
+        elif seq.num_tokens % self.block_size == 0:
             # Now, we just add a token to the last block and it reaches full. So we need to mark it as full round block.
             assert last_block.hash == -1, "Last block should not be full when appending to it."
             last_block_token_ids = seq.get_block_token_ids(seq.num_blocks - 1)

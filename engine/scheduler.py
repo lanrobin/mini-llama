@@ -15,10 +15,22 @@ class Scheduler:
         self.running: deque[Sequence] = deque()
 
     def add_task(self, seq:Sequence):
+        '''
+        Add a new sequence to the scheduler. The new sequence will be added to the waiting queue and will be scheduled in the next scheduling round.
+        '''
         self.waiting.append(seq)
 
     def schedule(self) -> tuple[list[Sequence], bool]:
-        # prefill stage.
+        '''
+        Schedule sequences for processing. This function will first try to schedule waiting sequences, and if there is still capacity, it will try to schedule running sequences for decoding.
+        
+        Prefill Stage (Prompt Processing):
+        This is the "reading" phase. When you hit enter on a prompt, the model processes all the input tokens simultaneously.
+        
+        Decode Stage (Token Generation):
+        This is the "writing" phase. The model generates the response one token at a time. And this newly generated token can be used as part of the input for generating the next token,
+        which is called auto-regressive decoding until reaching the end of sequence token or max completion tokens.
+        '''
         scheduled_seqs = []
         num_seqs = 0
         num_batched_tokens = 0
@@ -43,6 +55,10 @@ class Scheduler:
         # decode stage.
         while self.running and num_seqs < self.max_num_seqs:
             seq = self.running.popleft()
+            # If there is not enough blocks for the new token, we need to preempt some sequences to free blocks until there are enough blocks for the new token.
+            # If we can not preempt any sequence, we have to preempt the current sequence itself and break the loop.
+            # When comes here, the newly generated token has been added to the sequence, so seq.num_tokens has been updated.
+            # So we need the call the may_append function to check if we need to allocate a new block for the new token and update the block table accordingly.
             while not self.block_manager.can_append(seq):
                 self.logger.debug(f"Preempting seq {seq.seq_id} due to insufficient blocks.")
                 if self.running:
@@ -63,15 +79,28 @@ class Scheduler:
         return scheduled_seqs, False
 
     def is_finished(self) -> bool:
+        '''
+        No waiting sequences and no running sequences means all sequences are finished.
+        '''
         return not self.waiting and not self.running
     
     def preempt(self, seq:Sequence):
+        '''
+        Remove the sequence from running state and put it back to waiting state.
+        This function is called when the sequence is preempted due to insufficient blocks for appending new token.
+        And also release the blocks occupied by the sequence.
+        '''
         seq.state = SequenceState.WAITING
         self.block_manager.free_blocks(seq)
         self.waiting.appendleft(seq)
     
     def post_process(self, seqs: list[Sequence], token_ids: list[int]) -> dict[int, bool]:
-
+        '''
+        Check if the sequences are finished after appending the newly generated token. If a sequence is finished, we free its blocks and remove it from running sequences.
+        There are two conditions for a sequence to be finished: 
+        1) the newly generated token is the end of sequence token and the sequence is not set to ignore eos;
+        2) the number of completion tokens reaches the max tokens.
+        '''
         if len(seqs) != len(token_ids):
             self.logger.warning(f"Number of sequences {len(seqs)} does not match number of token IDs {len(token_ids)}.")
 
