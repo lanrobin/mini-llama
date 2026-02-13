@@ -79,6 +79,22 @@ class BlockManager:
         if the hash is same, then we will compare the token ids to make sure they are the same block. If there is a cache hit, we will share this block and increase its reference count. 
         
         If there is a cache miss, we will allocate a new block for this block and update the hash table.
+        
+        For the cache mechanism, we can only share all the blocks from sequences beginning to current block if possible,
+        as we caculate the hash with the prefix of previous block hash. So if there is a mismatch in the middle block,
+        we will not share any blocks after this block, even there are identical tokens with other sequences after hash mismatch.
+        Take an example, we have 2 sequences, seq1 with token ids [1,2,3,4,5,6] and seq2 with token ids [1,2,0,4,5,6], and the block size is 2.
+        When we allocate blocks for seq1, we will compute the hash for block 0 with token ids [1,2] and prefix -1, 
+        and compute the hash for block 1 with token ids [3,4] and prefix hash of block 0 and block 2 with token ids [5,6] and prefix hash of block 1.
+        So we have 3 blocks allocated for seq1 and the hash table is updated accordingly.
+        When we allocate blocks for seq2, we will compute the hash for block 0 with token ids [1,2] and prefix -1,
+        which is identical to block 0 of seq1. So in seq2.num_cached_tokens += 2, but in block 1, we will compute the hash with token ids [0,4] and prefix hash of block 0, 
+        which is different from block 1 [3,4] of seq1. So we have a cache miss and we can not share block 1, even there are identical tokens [5,6] in block 2 of both seq1 and seq2.
+        This is because we only compute the hash with the prefix of previous block hash, so once there is a mismatch, we will not share any blocks after this block.
+        Finally, seq1.num_cached_tokens == 0 and seq2.num_cached_tokens == 2, and both of them have 3 blocks allocated, but seq1 shares block 0 with seq2, and seq2 has its own block 1 and block 2.
+        
+        So, in prefill stage, it will reuse the shared tokens to reduce the computation. And it assumes that the shared token are from the beginning of the sequence.
+        This is what we called Prefix Caching.
         '''
         assert not seq.block_table, "Blocks have already been allocated for this sequence."
 

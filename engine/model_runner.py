@@ -99,6 +99,26 @@ class ModelRunner(ABC):
         return method(*args)
     
     def prepare_prefill(self, seqs: list[Sequence]) -> tuple[torch.Tensor, torch.Tensor]:
+        '''
+        Prefill stage is for processing the prompt tokens. In this stage, we will prepare the input_ids
+        and positions for all the uncached tokens in the sequences and also prepare the block tables if there are cached blocks.
+        
+        This function is a little bit complex, let take an example to explain the logic.
+        Assume we have 3 sequences with block size 2 and the following token ids (after tokenization):
+        seq1: [1,2,3,4,5,6,7]
+        seq2: [1,2,0,4,5,6,7]
+        seq3: [1,2,3,4,0,6,7,8]
+        
+        After prefill, all the result should be:
+                
+        input_ids:[1,2,3,4,5,6,7,0,4,5,6,7,0,6,7,8]
+                   |     seq1   |   seq2  |   seq3|
+        positions:[0,1,2,3,4,5,6,2,3,4,5,6,4,5,6,7]
+                   |   seq1     | seq2    |  seq3 |
+        cu_seqlens_q: [0,7, 7+5 = 12, 12 + 4 = 16] => [0,7,12,16]
+        cu_seqlens_k: [0,7, 7+7 = 14, 14 + 8 = 22] => [0,7,14,22]
+        slot_mappings: [0,0,0,0,0,0,0, 1,1,1,1,1, 2,2,2,2] => [0]*7 + [1]*5 + [2]*4
+        '''
         input_ids = []
         positions = []
         cu_seqlens_q = [0]
