@@ -8,7 +8,7 @@ from engine.model_runner import MasterModelRunner, SlaveModelRunner
 from engine.scheduler import Scheduler
 from engine.sequence import Sequence
 from utils import SamplingParams, Logger, Config, sampling_params, sampling_params
-from transformers import LlamaTokenizer
+from transformers import AutoTokenizer
 import torch.multiprocessing as mp
 
 class LLMEngine:
@@ -42,7 +42,7 @@ class LLMEngine:
                 self.events.append(event)
 
         self.master_runner = MasterModelRunner(config, rank=0, events=self.events)
-        self.tokenizer = LlamaTokenizer.from_pretrained(model_path, use_fast=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
         '''
         In LLAMA models, there are multiple end-of-sequence (EOS):
         "eos_token_id":
