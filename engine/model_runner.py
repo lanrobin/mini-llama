@@ -115,8 +115,10 @@ class ModelRunner(ABC):
                    |     seq1   |   seq2  |   seq3|
         positions:[0,1,2,3,4,5,6,2,3,4,5,6,4,5,6,7]
                    |   seq1     | seq2    |  seq3 |
-        cu_seqlens_q: [0,7, 7+5 = 12, 12 + 4 = 16] => [0,7,12,16]
-        cu_seqlens_k: [0,7, 7+7 = 14, 14 + 8 = 22] => [0,7,14,22]
+        cu_seqlens_q: [0,7, 7+5 = 12, 12 + 4 = 16] => [0,7,12,16] Without cached tokens.
+        cu_seqlens_k: [0,7, 7+7 = 14, 14 + 8 = 22] => [0,7,14,22] All tokens including cached and uncached tokens.
+        max_seqlen_q: 7 (seq1 has the longest uncached tokens)
+        max_seqlen_k: 8 (seq3 has the longest total tokens)
         
         slot_mappings, the value is the physical address of kv_cache in GPU for each token in the input_ids.
         
@@ -222,6 +224,13 @@ class ModelRunner(ABC):
     
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool) -> torch.Tensor:
+        '''
+        This function will run the model in either eager mode or CUDA graph mode depending on the input sequence length and the enforced_eager flag.
+        
+        After run the model, it will return the logits for the last token in the input_ids, which will be used for sampling the next token.
+        The logits is a tensor with shape [number_of_sequences, vocab_size].
+        For each sequence, vocab_size of elements mean the possibility of next token id, in the follow step, the sampler will pick one token id based on it strategy.
+        '''
         if is_prefill or self.enforced_eager or input_ids.size(0) > self.CUDA_GRAPH_CAPTURE_SIZE:
             self.logger.info(f"Running model eagerly on rank {self.rank} due to enforced eager mode with input_ids shape: {input_ids.shape} and positions shape: {positions.shape}")
             return self.model.compute_logits(self.model(input_ids, positions))
@@ -242,6 +251,10 @@ class ModelRunner(ABC):
             return self.model.compute_logits(graph_vars["outputs"][:bs])
     
     def get_good_graph_bs(self, bs:int) -> int:
+        '''
+        This method is used to get the good batch size for CUDA graph replay.
+        It will return the smallest batch size in self.graph_bs that is greater than or equal to the input batch size.
+        '''
         # O(N)
         #return next(x for x in self.graph_bs if x >= bs)
 
@@ -307,6 +320,17 @@ class ModelRunner(ABC):
 
     @torch.inference_mode()
     def capture_cuda_graphs(self):
+        '''
+        Here we leverage cudaStream.capture to capture the decode stage of the model with different batch sizes, and store the graphs in a dictionary for later use.
+        cudastream.capture always involve following steps:
+        1. Create a cuda stream and initialized the variables.
+        2. Warmup the stream to make sure everything is ready.
+        3. Capture the graph by launching kernels on the stream.
+        4. Synchronize and store the graph for later replay.
+        
+        In this method, all size of graphs shared the same input and output tensors,
+        so it starts from the largest batch size to capture the graph, and then reuse the same graph pool for smaller batch size graphs to save memory and speed up the capture process.
+        '''
         hf_config = self.config.hf_config
         # max batch size for CUDA graph capture, 512 is just an experience number for RTX3090
         max_bs = min(self.config.max_num_seqs, self.CUDA_GRAPH_CAPTURE_SIZE)
