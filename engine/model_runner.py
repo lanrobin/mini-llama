@@ -117,7 +117,8 @@ class ModelRunner(ABC):
                    |   seq1     | seq2    |  seq3 |
         cu_seqlens_q: [0,7, 7+5 = 12, 12 + 4 = 16] => [0,7,12,16]
         cu_seqlens_k: [0,7, 7+7 = 14, 14 + 8 = 22] => [0,7,14,22]
-        slot_mappings: [0,0,0,0,0,0,0, 1,1,1,1,1, 2,2,2,2] => [0]*7 + [1]*5 + [2]*4
+        
+        slot_mappings, the value is the address of kv_cache in GPU for each token in the input_ids, -1 means no mapping (no cache or cache miss).
         '''
         input_ids = []
         positions = []

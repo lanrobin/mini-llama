@@ -24,6 +24,10 @@ class Block:
 
 
 class BlockManager:
+    '''
+    BlockManager is responsible for managing the key-value cache blocks for all sequences. It maintains a pool of blocks and allocates/free blocks for sequences as needed.
+    Each layer has the same number of kv cache blocks, they keep the same sharp, from management perspective, we treat them as a single layer.
+    '''
     def __init__(self, num_blocks:int, block_size:int):
         self.logger = Logger()
         self.block_size = block_size
