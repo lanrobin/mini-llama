@@ -118,7 +118,9 @@ class ModelRunner(ABC):
         cu_seqlens_q: [0,7, 7+5 = 12, 12 + 4 = 16] => [0,7,12,16]
         cu_seqlens_k: [0,7, 7+7 = 14, 14 + 8 = 22] => [0,7,14,22]
         
-        slot_mappings, the value is the address of kv_cache in GPU for each token in the input_ids, -1 means no mapping (no cache or cache miss).
+        slot_mappings, the value is the physical address of kv_cache in GPU for each token in the input_ids.
+        
+        Finally, we will create a context for this prefill stage and store it in the context manager, and the model runner will use this context when running the model.
         '''
         input_ids = []
         positions = []
@@ -177,6 +179,11 @@ class ModelRunner(ABC):
         return input_ids_tensor, positions_tensor
     
     def prepare_decode(self, seqs: list[Sequence]) -> tuple[torch.Tensor, torch.Tensor]:
+        '''
+        Comparing the prefill stage, the decode stage is much simpler,
+        as we only need to proceed the last token just added. All the previous tokens have been processed in the prefill stage 
+        and the new generated token will be added to the end of the sequence, so we just need to prepare the input_ids and positions for the last token.
+        '''
         input_ids = []
         positions = []
         slot_mappings = []
@@ -188,6 +195,8 @@ class ModelRunner(ABC):
             context_lens.append(len(seq))
             # we only need to map the block where the last token resides.
             slot_mappings.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
+            
+        block_tables = self.prepare_block_tables(seqs)
 
         input_ids_tensor = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions_tensor = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
@@ -196,7 +205,8 @@ class ModelRunner(ABC):
         context = Context(
             is_prefill=False,
             slot_mapping=slot_mappings_tensor,
-            context_lens=context_lens_tensor
+            context_lens=context_lens_tensor,
+            block_tables=block_tables
         )
         self.context_manager.set_default_context(context)
         return input_ids_tensor, positions_tensor
@@ -204,7 +214,7 @@ class ModelRunner(ABC):
     
     def prepare_block_tables(self, seqs: list[Sequence]) -> torch.Tensor:
         '''
-        We will make all the block tables the same length by padding -1 to the end for all the sequences.
+        We will make all the block tables the same length to the longest sequence by padding -1 to the end for all the sequences.
         '''
         max_block_table_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [seq.block_table + [-1] * (max_block_table_len - len(seq.block_table)) for seq in seqs]
@@ -213,10 +223,10 @@ class ModelRunner(ABC):
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool) -> torch.Tensor:
         if is_prefill or self.enforced_eager or input_ids.size(0) > self.CUDA_GRAPH_CAPTURE_SIZE:
-            self.logger.debug(f"Running model eagerly on rank {self.rank} due to enforced eager mode with input_ids shape: {input_ids.shape} and positions shape: {positions.shape}")
+            self.logger.info(f"Running model eagerly on rank {self.rank} due to enforced eager mode with input_ids shape: {input_ids.shape} and positions shape: {positions.shape}")
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
-            self.logger.debug(f"Running model on rank {self.rank} with input_ids shape: {input_ids.shape} and positions shape: {positions.shape} in CUDA graph mode.")
+            self.logger.info(f"Running model on rank {self.rank} with input_ids shape: {input_ids.shape} and positions shape: {positions.shape} in CUDA graph mode.")
             bs = input_ids.size(0)
             context = self.context_manager.get_default_context()
             graph = self.graphs[self.get_good_graph_bs(bs)]
@@ -250,6 +260,10 @@ class ModelRunner(ABC):
         return target_bs
     
     def prepare_sample(self, seqs: list[Sequence]) -> torch.Tensor:
+        '''
+        Just prepare the temperatures for sampling, which is only used in rank 0 as it is responsible for sampling and generating the token ids,
+        and then broadcast to other ranks if needed.
+        '''
         temperatures = [seq.temperature for seq in seqs]
         return torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
 
@@ -264,6 +278,13 @@ class ModelRunner(ABC):
         torch.cuda.empty_cache()
 
     def allocate_kvcache(self):
+        '''
+        It will preserve the kv cache for each layer in a big chunk of memory with shape:
+        [2 (key and value), num_hidden_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim],
+        and then assign the corresponding chunk to each attention layer's k_cache and v_cache.
+        This cache is managed by the block manager, which will allocate/free blocks for each sequence
+        and the attention layer will write the key/value to the corresponding block according to the slot mapping in the context.
+        '''
         config = self.config
         hf_config = config.hf_config
         free, total = torch.cuda.mem_get_info()
@@ -301,7 +322,7 @@ class ModelRunner(ABC):
         self.graph_pool = None
 
         for bs in reversed(self.graph_bs):
-            self.logger.info(f"Capturing CUDA graph for batch size {bs} on rank {self.rank}")
+            # self.logger.info(f"Capturing CUDA graph for batch size {bs} on rank {self.rank}")
             graph = torch.cuda.CUDAGraph()
 
             context = Context(
@@ -315,15 +336,15 @@ class ModelRunner(ABC):
                 block_tables=block_tables[:bs]
             )
             self.context_manager.set_default_context(context)
-            outputs[:bs] = self.run_model(input_ids[:bs], positions[:bs], is_prefill=False)
+            outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
             # graph_pool is None for the largest batch size graph, so it will create a new pool.
             # and put it into graph.pool
             with torch.cuda.graph(graph, self.graph_pool):
-                outputs[:bs] = self.run_model(input_ids[:bs], positions[:bs], is_prefill=False)
+                outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
             # If it is the first time creating the graph pool with largest batch size
             # assign it and will reuse for the following smaller batch size graphs.
             if self.graph_pool is None:
-                self.logger.info(f"Creating CUDA graph pool on rank {self.rank} as it does not exist.")
+                # self.logger.info(f"Creating CUDA graph pool on rank {self.rank} as it does not exist.")
                 self.graph_pool = graph.pool()
             self.graphs[bs] = graph
             torch.cuda.synchronize()

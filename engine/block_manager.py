@@ -27,6 +27,7 @@ class BlockManager:
     '''
     BlockManager is responsible for managing the key-value cache blocks for all sequences. It maintains a pool of blocks and allocates/free blocks for sequences as needed.
     Each layer has the same number of kv cache blocks, they keep the same sharp, from management perspective, we treat them as a single layer.
+    This is the bridge between the virtual blocks to physical blocks. Each sequence has its own virtual block table which is virtually continuous, which maps the virtual block index to the physical block id in the block manager.
     '''
     def __init__(self, num_blocks:int, block_size:int):
         self.logger = Logger()
@@ -131,6 +132,7 @@ class BlockManager:
                    # Should not happen, because if there is a cache hit, the block should be in used_block_ids.
                    self.logger.error(f"Cache hit but block {block_id} is not in used_block_ids.")
                    block_id = self._allocate_block()
+                   block = self.blocks[block_id]
 
                if hash != -1:
                    block.update(token_ids, hash)

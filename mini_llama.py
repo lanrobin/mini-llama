@@ -11,7 +11,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
 
-    llm = LLM(model_path=model_path, enforce_eager=True, tensor_parallel_size=1)
+    llm = LLM(model_path=model_path, enforce_eager=False, tensor_parallel_size=1)
 
     sampling_params = SamplingParams(temperature=0.7, max_tokens=1024, ignore_eos=False)
 

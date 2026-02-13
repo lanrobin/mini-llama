@@ -97,8 +97,20 @@ class Attention(nn.Module):
         v_cache = self.v_cache
         if k_cache.numel() > 0 and v_cache.numel() > 0:
             # self.logger.info(f"slot_mapping max:{context.slot_mapping.max().item()} min:{context.slot_mapping.min().item()}, k_cache shape: {k_cache.shape}, v_cache shape: {v_cache.shape}")
-            store_kvcache_slow(k, v, k_cache, v_cache, context.slot_mapping)
-            # store_kvcache_pytorch(k, v, k_cache, v_cache, context.slot_mapping)
+            '''
+            When you call store_kvcache_slow, you have to turn capture_cuda_graphs off, because it will throw error:
+            torch.AcceleratorError: CUDA error: operation not permitted when stream is capturing
+            Search for cudaErrorStreamCaptureUnsupported' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html
+            for more information.
+            CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+            For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+            Compile with TORCH_USE_CUDA_DSA` to enable device-side assertions.
+            
+            The root cause is that store_kvcache_slow uses regular PyTorch CPU operations which are not compatible with CUDA graph capture,
+            while store_kvcache uses a custom Triton kernel which can be captured in a CUDA graph.
+            '''
+            #store_kvcache_slow(k, v, k_cache, v_cache, context.slot_mapping)
+            store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:
             if context.block_tables is not None:
                 #self.logger.info("Using block tables for attention computation.")
