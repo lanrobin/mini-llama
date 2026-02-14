@@ -68,11 +68,6 @@ class VocabParallelEmbeddingHead(nn.Module):
         我们假设 x = [2,5], weight 在类的注释部分已经给出。
         假设有2个GPU: self.tp_world_size = 2
         
-        :param self: Description
-        :param x: Description
-        :type x: torch.Tensor
-        :return: Description
-        :rtype: Tensor | None
         '''
         if self.tp_world_size > 1:
             mask = (x >= self.vocab_start_index) & (x < self.vocab_end_index)
@@ -133,7 +128,6 @@ class VocabParallelEmbeddingHead(nn.Module):
 class ParallelLMHead(VocabParallelEmbeddingHead):
     '''
     Parallel Language Model Head。
-    
     '''
     def __init__(self, vocab_size: int, hidden_size: int, bias: bool = False):
         assert not bias, "Bias is not supported in ParallelLMHead."
@@ -141,15 +135,42 @@ class ParallelLMHead(VocabParallelEmbeddingHead):
         self.context_manager = ContextManager()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor | None:
+        '''
+        把model计算得到的hidden states映射到vocab size维度的logits上，供后续的softmax和采样使用。
+        如果是在prefill阶段：
+            x.shape = [context.cu_seqlen_q[-1], hidden_size]
+        如果是在decode阶段：
+            x.shape = [len(seqs), hidden_size]
+        '''
         context = self.context_manager.get_default_context()
         logits:torch.Tensor | None = None
         if context is not None and context.is_prefill:
+            '''
+            在预填充阶段(prefill stage)，我们只需要计算当前步的token对应的logits，而不需要计算整个序列的logits。
+            比如 context.cu_seqlens_q = [  0,  49,  99, 146]，表示当前步的token是第48个,第98个token和第145个token，
+            那么我们只需要计算这三个token对应的logits，而不需要计算第0到第47个或者其它中间的token的logits
+            '''
             last_indices = context.cu_seqlens_q[1:] -1
+            '''
+            last_indices = [48, 98, 145]
+            '''
             x = x[last_indices].contiguous()
+            '''
+            x.shape = [len(seqs), hidden_size]
+            '''
 
+        '''
+           logits = x[len(seqs), hidden_size] @ self.weight[vocab_size, hidden_size].T[hidden_size, vocab_size] = [len(seqs), vocab_size]
+           
+           F.linear(x,w,b)的计算过程是: output = x @ w.T + b
+           这里我们不使用bias，所以b为None。
+        '''
         logits = F.linear(x, self.weight)
 
         if self.tp_world_size > 1:
+            '''
+            如果在多块GPU中，每块GPU计算得到的logits只是整个词汇表的一部分，我们需要通过all_gather操作将所有GPU的logits汇总起来，得到完整的logits。
+            '''
             logits_list = [torch.empty_like(logits) for _ in range(self.tp_world_size)] if self.tp_rank == 0 else None
             dist.all_gather(logits_list, logits)
             logits = torch.cat(logits_list, dim=-1) if self.tp_rank == 0 else None

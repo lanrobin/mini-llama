@@ -96,6 +96,7 @@ def _build_causal_mask(seq_q: int, seq_k: int, device: torch.device) -> torch.Te
     i = torch.arange(seq_q, device=device).unsqueeze(1)  # (seq_q, 1)
     j = torch.arange(seq_k, device=device).unsqueeze(0)  # (1, seq_k)
     # bottom-right 对齐: 允许 j <= i + (seq_k - seq_q)
+    # mask就是一个由 True/False 组成的矩阵，True 表示被屏蔽，False 表示保留
     mask = j > (i + seq_k - seq_q)
     return mask
 

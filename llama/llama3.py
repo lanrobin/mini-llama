@@ -178,18 +178,41 @@ class Llama32Model(nn.Module):
 
 
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        '''
+        This forward function does the following steps:
+        1. Get the token id's embedding to hidden states. The shape of hidden states is [len(input_ids), hidden_size] = [number_of_tokens, 3072].
+        2. For each layer in the decoder layers, pass the hidden states through the layer. The shape of hidden states remains [number_of_tokens, hidden_size] throughout the layers.
+        3. After all layers, apply the final layer normalization to the hidden states.
+        '''
         hidden_states = self.embed_tokens(input_ids)
+        '''
+        hidden_states.shape = [number_of_tokens, hidden_size]
+        '''
         residual = None
 
         for layer in self.layers:
+            '''
+            Typical residual connection in transformer decoder layer:
+            x = f(x) + x
+            '''
             hidden_states, residual = layer(positions, hidden_states, residual)
 
+        '''
+         Root Mean Square (RMS):
+            RMS(x) = sqrt(sum(x^2)/n)
+            y = x / RMS(x) * weight
+        '''
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
 
 class LlamaForCausalLM(nn.Module):
-    
+    '''
+    Causal language model with Llama32Model as the backbone and a parallel LM head for output.
+    Causal means that the model can only attend to previous tokens, not future tokens. This is typically used for autoregressive generation tasks.
+    To predict the N-th token, we can only look 0 to N-1 tokens.
+    When in attention, we will use a causal mask to mask out the future tokens, so that the model can only attend to the past tokens.
+    '''
     packed_modules_mapping = {
         "q_proj": ("qkv_proj", "q"),
         "k_proj": ("qkv_proj", "k"),
@@ -204,6 +227,8 @@ class LlamaForCausalLM(nn.Module):
         assert config is not None, "LlamaConfig must be provided."
         self.config = config
         self.model = Llama32Model(config)
+        
+        # its weight is assigned to embed_tokens.weight when tie_word_embeddings is True, otherwise it has its own weight.
         self.lm_head = ParallelLMHead(
             vocab_size=config.vocab_size,
             hidden_size=config.hidden_size,

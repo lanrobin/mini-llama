@@ -109,8 +109,13 @@ class LLMEngine:
         if NO, we keep the sequence in running state and wait for next step to generate the next token.
         '''
         seqs, is_prefill = self.scheduler.schedule()
+        # Get next token ids for each sequence from the model runner
         token_ids = self.master_runner.run(seqs, is_prefill)
+        
+        # Add the newly generated token ids to the sequences and check if they are finished.
         self.scheduler.post_process(seqs, token_ids)
+        
+        # return the finished sequences' generated token ids and the number of tokens processed in this step for logging.
         outputs = [(seq.seq_id, seq.completion_tokens) for seq in seqs if seq.is_finished]
         num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
         return outputs, num_tokens

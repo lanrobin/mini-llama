@@ -72,6 +72,11 @@ class ModelRunner(ABC):
         '''
         This is the default run method that both Master and Slave ModelRunners use to process sequences.
         Besides this, the MasterModelRunner will write this method to shared memory for SlaveModelRunners to read and execute.
+        
+        self.run_model will return a tensor with shape [number_of_sequences, vocab_size], 
+        and then the sampler will pick the next token id for each sequence based on the logits and temperatures.
+        
+        See Sampler.forward for more details about the sampling strategy.
         '''
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
