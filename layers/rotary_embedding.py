@@ -14,7 +14,7 @@ class RotaryEmbedding(nn.Module):
         assert rotary_dim == head_size, "Currently only full rotary embedding is supported."
         self.head_size = head_size
         self.rotary_dim = rotary_dim
-        self.max_position = max_position_embeddings
+        self.max_position = max_position_embeddings # 131072
         self.base = base
 
         inv_freq = 1.0 / (base ** (torch.arange(0, rotary_dim, 2, dtype=torch.float32) / rotary_dim))

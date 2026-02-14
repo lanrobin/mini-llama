@@ -52,6 +52,43 @@ class Llama32Attention(nn.Module):
 
 
     def forward(self, hidden_states: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        '''
+        hidden_states.shape = [number_of_tokens, hidden_size] = [number_of_tokens, 3072]
+        positions.shape = [number_of_tokens]
+        self.qkv_proj.weight.shape = [hidden_size, (num_attention_heads + 2 * num_kv_heads) * head_dim] = [3072, (24 + 2 * 8) * 128] = [3072, 5120]
+        
+        qkv = hidden_states[number_of_tokens, 3072] @ self.qkv_proj.weight[3072, 5120] = [number_of_tokens, 5120]
+        qkv.shape = [number_of_tokens, (num_attention_heads + 2 * num_kv_heads) * head_dim] = [number_of_tokens, 5120]
+        
+        q.shape = [number_of_tokens, num_heads_in_current_tp * head_dim] = [number_of_tokens, 24 * 128] = [number_of_tokens, 3072]
+        k.shape = [number_of_tokens, num_kv_heads_in_current_tp * head_dim] = [number_of_tokens, 8 * 128] = [number_of_tokens, 1024]
+        v.shape = [number_of_tokens, num_kv_heads_in_current_tp * head_dim] = [number_of_tokens, 8 * 128] = [number_of_tokens, 1024]
+        
+        qv.shape = [number_of_tokens, num_heads_in_current_tp, head_dim] = [number_of_tokens, 24, 128]
+        kv.shape = [number_of_tokens, num_kv_heads_in_current_tp, head_dim] = [number_of_tokens, 8, 128]
+        vv.shape = [number_of_tokens, num_kv_heads_in_current_tp, head_dim] = [number_of_tokens, 8, 128]
+        
+        self.qkv_bias = False, so we won't apply RMSNorm to q and k before applying rotary embedding.
+        
+        Apply positional embedding to q and k, but not v. This is because in the original implementation of LLaMA,
+        only q and k are applied with RoPE, while v is not. The reason for this design choice is that RoPE is used to
+        encode the relative positional information between tokens, which is crucial for the attention mechanism to
+        capture the dependencies between tokens. Since v is used to compute the output of the attention mechanism,
+        it does not need to be encoded with positional information.
+        
+        If you want to dig deeper into the details of how RoPE works, 
+        please refer to the forward function of RotaryEmbedding class in layers/rotary_embedding.py.
+        
+        ATTENTION:
+        Here is where the "magic" happens. attn(q, k, v) = softmax(q @ k.T / sqrt(head_dim)) @ v,
+        for implementation details, please refer to the forward function of Attention class in layers/attention.py.
+        
+        Now the o.shape = []number_of_tokens, num_heads_in_current_tp, head_dim] = [number_of_tokens, 24, 128],
+        so we need to reshape it back to [number_of_tokens, hidden_size] = [number_of_tokens, 3072] before passing it to the output projection layer.
+        
+        self.o_proj.weight.shape = [hidden_size, num_attention_heads * head_dim] = [3072, 24 * 128] = [3072, 3072]
+        output.shape = [number_of_tokens, hidden_size] = o.flatten(1, dim=-1)[number_of_tokens, 24 * 128] @ self.o_proj.weight[3072, 3072] = [number_of_tokens, 3072]
+        '''
         qkv = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         qv = q.view(-1, self.num_heads_in_current_tp, self.head_dim)
@@ -77,6 +114,18 @@ class Llama32MLP(nn.Module):
         
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        '''
+        hidden_states.shape = [number_of_tokens, hidden_size] = [number_of_tokens, 3072]
+        
+        Linear operation: hidden_states @ gate_up_proj.weight = [number_of_tokens, hidden_size] @ [hidden_size, intermediate_size * 2] = [number_of_tokens, intermediate_size * 2] = [number_of_tokens, 16384]
+        gate_up.shape = [number_of_tokens, intermediate_size * 2] = [number_of_tokens, 8192 * 2] = [number_of_tokens, 16384]
+        
+        Activation operation: see the forward function of SiluAndMultiply class in layers/activation.py for details.
+
+        ax.shape = [number_of_tokens, intermediate_size] = [number_of_tokens, 8192]
+        
+        axd.shape = [number_of_tokens, hidden_size] = [number_of_tokens, 3072]
+        '''
         gate_up = self.gate_up_proj(hidden_states)
         ax = self.activation_fn(gate_up)
         axd = self.down_proj(ax)
@@ -109,9 +158,9 @@ class Llama32DecoderLayer(nn.Module):
         self.logger.info(f">>>>>>>>>>>>>>>>======Llama32DecoderLayer {layer_id} with hidden_size={config.hidden_size}, intermediate_size={config.intermediate_size}, num_attention_heads={config.num_attention_heads}, num_key_value_heads={config.num_key_value_heads}, head_dim={config.head_dim}, rms_norm_eps={config.rms_norm_eps}")
         self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
-
+        #config.intermediate_size =  8192
         self.mlp = Llama32MLP(hidden_size=config.hidden_size, intermediate_size=config.intermediate_size, hidden_act=config.hidden_act)
-
+        
         self.self_attn = Llama32Attention(
             hidden_size=config.hidden_size,
             num_attention_heads=config.num_attention_heads,
@@ -125,10 +174,33 @@ class Llama32DecoderLayer(nn.Module):
         )
 
         self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
-        # More components would be defined here
         self.logger.info(f"<<<<<<<<<<<<<<<==========Llama32DecoderLayer {layer_id} initialized.")
 
     def forward(self, positions: torch.Tensor, hidden_states: torch.Tensor, residual: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        '''
+        This is a standard transformer decoder layer with self-attention and MLP:
+        1. Input hidden states go through layer normalization. Flattens the variance of the data to prevent numerical explosion,
+        ensuring stability during training and inference.
+        
+        2. Self-Attention Mechanism: The "Context Fusion Center." Its job is to look back at the KV Cache of previous tokens 
+        and figure out the exact meaning of the current token within the entire sentence 
+        (e.g., determining if "apple" refers to a smartphone or a fruit).
+        For the details of how self-attention works, please refer to the forward function of Llama32Attention class.
+        
+        3. Post-Attention Layer Normalization: Another layer normalization step to stabilize the data after the attention mechanism.
+        
+        4. MLP / FFN (Multilayer Perceptron / Feed-Forward Network): The "Knowledge Extraction Center." 
+        It uses non-linear activation functions (usually SwiGLU) to project the vector into a very high-dimensional space. 
+        This extracts and activates the "common sense" and logic the model memorized during pre-training, 
+        before mapping it back down to the original dimension.
+        for the details of how MLP works, please refer to the forward function of Llama32MLP class.
+        
+        positions.shape = [number_of_tokens], it contains the position index of each token in the input sequence, starting from 0.
+        for example, if there are three sequences of 3, 4, 5 tokens, the positions will be [0,1,2,0,1,2,3,0,1,2,3,4] respectively.
+        hidden_states.shape = [number_of_tokens, hidden_size] = [12, 3072] in the above example.
+        residual.shape = [number_of_tokens, hidden_size] = [12, 3072] in the above example.
+        
+        '''
         if residual is None:
             hidden_states, residual = self.input_layernorm(hidden_states), hidden_states
         else:
