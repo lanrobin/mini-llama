@@ -3,6 +3,11 @@ flash_attn_varlen_func 和 flash_attn_with_kvcache 的纯 PyTorch 实现。
 
 速度远不及真正的 Flash Attention，但代码逻辑清晰，便于学习理解。
 所有参数名和语义都与 flash_attn 库保持一致。
+=========
+Pure PyTorch implementation of flash_attn_varlen_func and flash_attn_with_kvcache.
+
+Much slower than the real Flash Attention, but the code logic is clear and easy to understand.
+All parameter names and semantics are consistent with the flash_attn library.
 """
 
 import math
@@ -13,6 +18,8 @@ import torch
 
 # ────────────────────────────────────────────────────────────────────
 # 工具函数
+# =========
+# Utility Functions
 # ────────────────────────────────────────────────────────────────────
 
 def _expand_kv_heads(k: torch.Tensor, v: torch.Tensor, num_heads_q: int):
@@ -21,17 +28,21 @@ def _expand_kv_heads(k: torch.Tensor, v: torch.Tensor, num_heads_q: int):
 
     如果 num_kv_heads < num_heads_q，则每个 KV head 被重复
     (num_heads_q // num_kv_heads) 次。
+    =========
+    Handle GQA / MQA: expand the K/V head dimension by repeating, so it matches the number of Q heads.
+
+    If num_kv_heads < num_heads_q, each KV head is repeated
+    (num_heads_q // num_kv_heads) times.
     """
-    num_kv_heads = k.shape[-2]
+    num_kv_heads = k.shape[-2] # k.shape = (seqlen_k_i, num_kv_heads, head_dim) = (49, 8, 128), num_kv_heads = 8
     if num_kv_heads == num_heads_q:
         return k, v
-    assert num_heads_q % num_kv_heads == 0, \
-        f"num_heads_q ({num_heads_q}) 必须能被 num_kv_heads ({num_kv_heads}) 整除"
-    repeat = num_heads_q // num_kv_heads
+    assert num_heads_q % num_kv_heads == 0, f"num_heads_q ({num_heads_q}) must be divisible by num_kv_heads ({num_kv_heads})"
+    repeat = num_heads_q // num_kv_heads # num_heads_q = 24, num_kv_heads = 8, repeat = 3
     # k: (..., num_kv_heads, head_dim) -> (..., num_heads_q, head_dim)
-    k = k.repeat_interleave(repeat, dim=-2)
-    v = v.repeat_interleave(repeat, dim=-2)
-    return k, v
+    kr = k.repeat_interleave(repeat, dim=-2)
+    vr = v.repeat_interleave(repeat, dim=-2)
+    return kr, vr
 
 
 def _naive_attention(q, k, v, causal_mask=None, softmax_scale=None):
@@ -47,6 +58,18 @@ def _naive_attention(q, k, v, causal_mask=None, softmax_scale=None):
 
     返回:
         output: (seq_q, num_heads, head_dim)
+    =========
+    The most basic Scaled Dot-Product Attention.
+
+    Args:
+        q: (seq_q, num_heads, head_dim)
+        k: (seq_k, num_heads, head_dim)
+        v: (seq_k, num_heads, head_dim)
+        causal_mask: (seq_q, seq_k) bool, True means the position is masked (excluded from attention)
+        softmax_scale: scaling factor, default 1/sqrt(head_dim)
+
+    Returns:
+        output: (seq_q, num_heads, head_dim)
     """
     head_dim = q.shape[-1]
     if softmax_scale is None:
@@ -57,11 +80,13 @@ def _naive_attention(q, k, v, causal_mask=None, softmax_scale=None):
 
     if causal_mask is not None:
         # causal_mask: (seq_q, seq_k) -> broadcast 到 (num_heads, seq_q, seq_k)
+        # ========= causal_mask: (seq_q, seq_k) -> broadcast to (num_heads, seq_q, seq_k)
         scores = scores.masked_fill(causal_mask.unsqueeze(0), float("-inf"))
 
     attn_weights = torch.softmax(scores, dim=-1)
 
     # 如果某一行全是 -inf（全被 mask），softmax 会产生 nan，替换成 0
+    # ========= If an entire row is -inf (fully masked), softmax produces nan; replace with 0
     attn_weights = attn_weights.nan_to_num(0.0)
 
     # (num_heads, seq_q, seq_k) @ (num_heads, seq_k, head_dim) -> (num_heads, seq_q, head_dim)
@@ -91,18 +116,54 @@ def _build_causal_mask(seq_q: int, seq_k: int, device: torch.device) -> torch.Te
 
     返回:
         mask: (seq_q, seq_k) bool, True = 被屏蔽
+    =========
+    Build a bottom-right aligned causal mask.
+
+    Flash Attention causal mask rule:
+        For query position i (0-indexed) and key position j:
+            Keep  (False): j - i <= seq_k - seq_q   (i.e. i + seq_k - seq_q >= j)
+            Mask  (True):  j - i >  seq_k - seq_q
+
+    Example (seq_q=2, seq_k=5, 0=keep, 1=mask):
+        0 0 0 0 1
+        0 0 0 0 0
+
+    Example (seq_q=5, seq_k=2):
+        1 1
+        1 1
+        1 1
+        0 1
+        0 0
+        
+    Example (seq_q=5, seq_k=5):
+    0, 1, 1, 1, 1
+    0, 0, 1, 1, 1
+    0, 0, 0, 1, 1
+    0, 0, 0, 0, 1
+    0, 0, 0, 0, 0
+    
+    The rule is:
+    make a matrix of shape (seq_q, seq_k)
+    for i < seq_q:
+    for j < seq_k:
+        if j - i <= seq_k - seq_q:
+            mask[i, j] = False
+        else:
+            mask[i, j] = True
+
+    Returns:
+        mask: (seq_q, seq_k) bool, True = masked
     """
-    # i: query 位置, j: key 位置
-    i = torch.arange(seq_q, device=device).unsqueeze(1)  # (seq_q, 1)
-    j = torch.arange(seq_k, device=device).unsqueeze(0)  # (1, seq_k)
-    # bottom-right 对齐: 允许 j <= i + (seq_k - seq_q)
-    # mask就是一个由 True/False 组成的矩阵，True 表示被屏蔽，False 表示保留
+    i = torch.arange(seq_q, device=device).unsqueeze(1)  # i.shape = (seq_q, 1)
+    j = torch.arange(seq_k, device=device).unsqueeze(0)  # j.shape = (1, seq_k)
     mask = j > (i + seq_k - seq_q)
-    return mask
+    return mask # mask.shape = (seq_q, seq_k)
 
 
 # ────────────────────────────────────────────────────────────────────
 # 从 paged KV cache 中提取连续的 K/V（用于 block_table 场景）
+# =========
+# Extract contiguous K/V from paged KV cache (for block_table scenarios)
 # ────────────────────────────────────────────────────────────────────
 
 def _gather_paged_kv(kv_cache: torch.Tensor, block_table: torch.Tensor, seqlen: int):
@@ -116,44 +177,61 @@ def _gather_paged_kv(kv_cache: torch.Tensor, block_table: torch.Tensor, seqlen: 
 
     返回:
         kv: (seqlen, num_kv_heads, head_dim) — 连续排列的 KV
+    =========
+    Gather contiguous KV sequences from paged KV cache according to block_table.
+
+    Args:
+        kv_cache:    (num_blocks, block_size, num_kv_heads, head_dim) — physical block pool
+        block_table: (max_num_blocks_per_seq,) int — logical block -> physical block index
+        seqlen:      int — actual sequence length (only take the first seqlen tokens)
+
+    Returns:
+        kv: (seqlen, num_kv_heads, head_dim) — contiguously arranged KV
     """
     block_size = kv_cache.shape[1]
     num_blocks_needed = math.ceil(seqlen / block_size)
-    
-    # 收集所需的物理 block
-    # block_table[:num_blocks_needed] -> 物理 block 索引列表
     physical_blocks = block_table[:num_blocks_needed]  # (num_blocks_needed,)
-    
-    # 取出对应的 block 数据: (num_blocks_needed, block_size, num_kv_heads, head_dim)
     gathered = kv_cache[physical_blocks]
-    
-    # reshape 成连续序列: (num_blocks_needed * block_size, num_kv_heads, head_dim)
     gathered = gathered.reshape(-1, *kv_cache.shape[2:])
-    
-    # 截取实际长度
     return gathered[:seqlen]
 
 
 # ────────────────────────────────────────────────────────────────────
 # flash_attn_varlen_func 的纯 PyTorch 实现
+# =========
+# Pure PyTorch implementation of flash_attn_varlen_func
 # ────────────────────────────────────────────────────────────────────
 
 def flash_attn_varlen_func(
     q: torch.Tensor,                          # (total_q, num_heads, head_dim)
     k: torch.Tensor,                          # (total_k, num_kv_heads, head_dim) 或 paged
+                                              # ========= (total_k, num_kv_heads, head_dim) or paged
     v: torch.Tensor,                          # 同 k
+                                              # ========= same as k
     cu_seqlens_q: torch.Tensor,               # (batch_size + 1,) int32 — query 的累计序列长度
+                                              # ========= (batch_size + 1,) int32 — cumulative query sequence lengths
     cu_seqlens_k: torch.Tensor,               # (batch_size + 1,) int32 — key 的累计序列长度
+                                              # ========= (batch_size + 1,) int32 — cumulative key sequence lengths
     max_seqlen_q: int,                        # batch 中最大 query 序列长度（此实现中不使用，仅保持接口一致）
+                                              # ========= max query sequence length in the batch (unused here, kept for API compatibility)
     max_seqlen_k: int,                        # batch 中最大 key 序列长度（同上）
+                                              # ========= max key sequence length in the batch (same as above)
     dropout_p: float = 0.0,                   # dropout 概率（此简易实现中忽略）
+                                              # ========= dropout probability (ignored in this simple implementation)
     softmax_scale: Optional[float] = None,    # 缩放因子，默认 1/sqrt(head_dim)
+                                              # ========= scaling factor, default 1/sqrt(head_dim)
     causal: bool = False,                     # 是否使用 causal mask
+                                              # ========= whether to use causal mask
     window_size=(-1, -1),                     # 滑动窗口（此实现中忽略）
+                                              # ========= sliding window (ignored in this implementation)
     softcap: float = 0.0,                     # softcap（此实现中忽略）
+                                              # ========= softcap (ignored in this implementation)
     alibi_slopes=None,                        # ALiBi（此实现中忽略）
+                                              # ========= ALiBi (ignored in this implementation)
     deterministic: bool = False,              # 确定性模式（此实现天然确定性）
+                                              # ========= deterministic mode (this implementation is inherently deterministic)
     return_attn_probs: bool = False,          # 是否返回 attn probs（此实现中忽略）
+                                              # ========= whether to return attn probs (ignored in this implementation)
     block_table: Optional[torch.Tensor] = None,  # (batch_size, max_num_blocks_per_seq) — paged attention
 ):
     """
@@ -180,45 +258,57 @@ def flash_attn_varlen_func(
 
     返回:
         output: (total_q, num_heads, head_dim) — 与 q 相同形状
+    =========
+    Attention for variable-length sequences (pure PyTorch implementation).
+
+    Core idea:
+        1. Q/K/V from multiple sequences are concatenated into a flat tensor; cu_seqlens marks each sequence's boundary.
+        2. Iterate over each sequence in the batch and compute attention independently (no cross-attention between sequences).
+        3. If block_table is provided, K/V are stored in paged format (4D) and need to be gathered via block_table.
+
+    Args:
+        q:             (total_q, num_heads, head_dim)
+                       All sequences' queries concatenated. total_q = sum(query lengths of each sequence)
+        k:             Without paging: (total_k, num_kv_heads, head_dim)
+                       With paging:    (num_blocks, block_size, num_kv_heads, head_dim)
+        v:             Same as k
+        cu_seqlens_q:  (batch_size+1,) int32, cumulative query lengths.
+                       E.g. batch has 3 sequences of lengths [3,5,2], then cu_seqlens_q = [0,3,8,10]
+                       The i-th sequence's query is q[cu_seqlens_q[i] : cu_seqlens_q[i+1]]
+        cu_seqlens_k:  (batch_size+1,) int32, cumulative key lengths, same semantics as above
+        causal:        If True, use bottom-right aligned causal mask
+        block_table:   (batch_size, max_num_blocks) or None
+                       If provided, K/V are stored in paged format
+
+    Returns:
+        output: (total_q, num_heads, head_dim) — same shape as q
     """
-    batch_size = cu_seqlens_q.shape[0] - 1
-    num_heads_q = q.shape[1]
-    head_dim = q.shape[2]
+    batch_size = cu_seqlens_q.shape[0] - 1 # batch_size = number of sequences
+    num_heads_q = q.shape[1] # q.shape = (number of tokens in batch, num_heads_q, head_dim) = (146, 24, 128), num_heads_q = 24
+    head_dim = q.shape[2] # head_dim = 128
     is_paged = (block_table is not None)
 
-    # 输出张量，和 q 相同 shape
     output = torch.zeros_like(q)
-
-    # 逐个序列处理（真正的 Flash Attention 当然是并行的，这里为了清晰用循环）
     for i in range(batch_size):
-        # 取出第 i 个序列的 Q
+        # Get the start and end indices for the i-th sequence in q and k/v
         q_start = cu_seqlens_q[i].item()
         q_end = cu_seqlens_q[i + 1].item()
-        q_i = q[q_start:q_end]       # (seqlen_q_i, num_heads, head_dim)
+        q_i = q[q_start:q_end]
         seqlen_q_i = q_end - q_start
 
-        # 取出第 i 个序列的 K/V
         k_start = cu_seqlens_k[i].item()
         k_end = cu_seqlens_k[i + 1].item()
         seqlen_k_i = k_end - k_start
 
         if is_paged:
-            # paged 模式: k/v shape = (num_blocks, block_size, num_kv_heads, head_dim)
-            # 需要按 block_table[i] 收集出连续的序列
             k_i = _gather_paged_kv(k, block_table[i], seqlen_k_i)
             v_i = _gather_paged_kv(v, block_table[i], seqlen_k_i)
         else:
-            # 非 paged 模式: 直接按 cu_seqlens_k 切片
             k_i = k[k_start:k_end]   # (seqlen_k_i, num_kv_heads, head_dim)
             v_i = v[k_start:k_end]
-
-        # 处理 GQA/MQA: 扩展 K/V 的 head 数量以匹配 Q
+            
         k_i, v_i = _expand_kv_heads(k_i, v_i, num_heads_q)
-
-        # 构建 causal mask
         mask = _build_causal_mask(seqlen_q_i, seqlen_k_i, q.device) if causal else None
-
-        # 计算 attention
         out_i = _naive_attention(q_i, k_i, v_i, causal_mask=mask, softmax_scale=softmax_scale)
         output[q_start:q_end] = out_i
 
@@ -227,29 +317,49 @@ def flash_attn_varlen_func(
 
 # ────────────────────────────────────────────────────────────────────
 # flash_attn_with_kvcache 的纯 PyTorch 实现
+# =========
+# Pure PyTorch implementation of flash_attn_with_kvcache
 # ────────────────────────────────────────────────────────────────────
 
 def flash_attn_with_kvcache(
     q: torch.Tensor,                                                        # (batch_size, seqlen_q, num_heads, head_dim)
     k_cache: torch.Tensor,                                                  # 非 paged: (batch_size, seqlen_cache, num_kv_heads, head_dim)
                                                                             # paged:   (num_blocks, block_size, num_kv_heads, head_dim)
+                                                                            # ========= non-paged: (batch_size, seqlen_cache, num_kv_heads, head_dim)
+                                                                            # ========= paged:     (num_blocks, block_size, num_kv_heads, head_dim)
     v_cache: torch.Tensor,                                                  # 同 k_cache
+                                                                            # ========= same as k_cache
     k: Optional[torch.Tensor] = None,                                      # (batch_size, seqlen_new, num_kv_heads, head_dim) 新的 key
+                                                                            # ========= (batch_size, seqlen_new, num_kv_heads, head_dim) new key
     v: Optional[torch.Tensor] = None,                                      # 同上，新的 value
+                                                                            # ========= same as above, new value
     rotary_cos: Optional[torch.Tensor] = None,                             # 忽略
+                                                                            # ========= ignored
     rotary_sin: Optional[torch.Tensor] = None,                             # 忽略
+                                                                            # ========= ignored
     cache_seqlens: Optional[Union[int, torch.Tensor]] = None,              # int 或 (batch_size,) — 每个序列 cache 中已有的 token 数
+                                                                            # ========= int or (batch_size,) — number of tokens already in each sequence's cache
     cache_batch_idx: Optional[torch.Tensor] = None,                        # 忽略
+                                                                            # ========= ignored
     cache_leftpad: Optional[torch.Tensor] = None,                          # 忽略
+                                                                            # ========= ignored
     block_table: Optional[torch.Tensor] = None,                            # (batch_size, max_num_blocks_per_seq)
     softmax_scale: Optional[float] = None,                                 # 缩放因子
+                                                                            # ========= scaling factor
     causal: bool = False,                                                  # 是否使用 causal mask
+                                                                            # ========= whether to use causal mask
     window_size=(-1, -1),                                                  # 忽略
+                                                                            # ========= ignored
     softcap: float = 0.0,                                                  # 忽略
+                                                                            # ========= ignored
     rotary_interleaved: bool = True,                                       # 忽略
+                                                                            # ========= ignored
     alibi_slopes=None,                                                     # 忽略
+                                                                            # ========= ignored
     num_splits: int = 0,                                                   # 忽略
+                                                                            # ========= ignored
     return_softmax_lse: bool = False,                                      # 忽略
+                                                                            # ========= ignored
 ):
     """
     带 KV Cache 的 attention（纯 PyTorch 实现），主要用于推理阶段的 decode。
@@ -279,29 +389,53 @@ def flash_attn_with_kvcache(
 
     返回:
         output: (batch_size, seqlen_q, num_heads, head_dim)
+    =========
+    Attention with KV Cache (pure PyTorch implementation), mainly used for decoding during inference.
+
+    Typical usage scenario:
+        - During decoding, only 1 new token per step (seqlen_q=1)
+        - Previous K/V already exist in the cache
+        - New K/V (if any) are appended to the cache, then attention is computed over the entire history
+
+    Core workflow:
+        1. If new k/v are provided, write them into the cache (starting from the cache_seqlens position)
+        2. Determine each sequence's actual KV length based on cache_seqlens (+ seqlen_new)
+        3. If using paged attention (block_table), gather KV from cache via block_table
+        4. Compute attention independently for each sequence
+
+    Args:
+        q:             (batch_size, seqlen_q, num_heads, head_dim)
+                       During decoding, typically seqlen_q=1
+        k_cache:       Non-paged: (batch_size, seqlen_cache, num_kv_heads, head_dim)
+                       Paged:     (num_blocks, block_size, num_kv_heads, head_dim)
+        v_cache:       Same as k_cache
+        k/v:           Optional new K/V, will be appended to the cache
+        cache_seqlens: Number of tokens already in each sequence's cache;
+                       if int, broadcast to all sequences
+        block_table:   Block mapping table for paged attention
+        causal:        Whether to apply causal mask
+
+    Returns:
+        output: (batch_size, seqlen_q, num_heads, head_dim)
     """
     batch_size, seqlen_q, num_heads_q, head_dim = q.shape
     is_paged = (block_table is not None)
 
-    # 处理 cache_seqlens
     if cache_seqlens is None:
         if is_paged:
             cache_seqlens = torch.zeros(batch_size, dtype=torch.int32, device=q.device)
         else:
-            # 非 paged 时，默认整个 cache 都有效
             cache_seqlens = torch.full((batch_size,), k_cache.shape[1], dtype=torch.int32, device=q.device)
     elif isinstance(cache_seqlens, int):
         cache_seqlens = torch.full((batch_size,), cache_seqlens, dtype=torch.int32, device=q.device)
 
     seqlen_new = k.shape[1] if k is not None else 0
 
-    # ── 步骤 1: 将新的 k/v 写入 cache（如果有） ──
     if k is not None and v is not None and seqlen_new > 0:
         for b in range(batch_size):
             start = cache_seqlens[b].item()
             end = start + seqlen_new
             if is_paged:
-                # paged 模式: 需要逐个 token 找到对应的物理位置
                 block_size = k_cache.shape[1]
                 for t in range(seqlen_new):
                     pos = start + t
@@ -310,15 +444,10 @@ def flash_attn_with_kvcache(
                     k_cache[block_idx, block_offset] = k[b, t]
                     v_cache[block_idx, block_offset] = v[b, t]
             else:
-                # 非 paged 模式: 直接按位置写入
                 k_cache[b, start:end] = k[b]
                 v_cache[b, start:end] = v[b]
-
-    # ── 步骤 2: 计算每个序列的实际 KV 长度 ──
-    # 实际长度 = cache 中已有长度 + 新追加的长度
     total_seqlens_k = cache_seqlens + seqlen_new  # (batch_size,)
 
-    # ── 步骤 3: 对每个序列独立计算 attention ──
     output = torch.zeros_like(q)
 
     for b in range(batch_size):
@@ -326,21 +455,14 @@ def flash_attn_with_kvcache(
         q_b = q[b]  # (seqlen_q, num_heads, head_dim)
 
         if is_paged:
-            # paged 模式: 按 block_table 从 cache block 池中收集 KV
             k_b = _gather_paged_kv(k_cache, block_table[b], seqlen_k_b)
             v_b = _gather_paged_kv(v_cache, block_table[b], seqlen_k_b)
         else:
-            # 非 paged 模式: 直接切片
             k_b = k_cache[b, :seqlen_k_b]  # (seqlen_k_b, num_kv_heads, head_dim)
             v_b = v_cache[b, :seqlen_k_b]
 
-        # 处理 GQA/MQA
         k_b, v_b = _expand_kv_heads(k_b, v_b, num_heads_q)
-
-        # 构建 causal mask
         mask = _build_causal_mask(seqlen_q, seqlen_k_b, q.device) if causal else None
-
-        # 计算 attention
         out_b = _naive_attention(q_b, k_b, v_b, causal_mask=mask, softmax_scale=softmax_scale)
         output[b] = out_b
 
