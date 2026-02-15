@@ -55,6 +55,12 @@ class Llama32Attention(nn.Module):
         '''
         hidden_states.shape = [number_of_tokens, hidden_size] = [number_of_tokens, 3072]
         positions.shape = [number_of_tokens]
+        
+        WHY we need to merge q,k,v weights into a single qkv_proj?
+        1. Performance: Merging q, k, v projections into a single linear layer can improve performance by reducing the number of separate matrix multiplications.
+        Instead of performing three separate linear transformations.
+        2. Memory Efficiency: A single merged projection can be more memory efficient, as it can reduce the number of intermediate tensors created during the forward pass.
+        
         self.qkv_proj.weight.shape = [hidden_size, (num_attention_heads + 2 * num_kv_heads) * head_dim] = [3072, (24 + 2 * 8) * 128] = [3072, 5120]
         
         qkv = hidden_states[number_of_tokens, 3072] @ self.qkv_proj.weight[3072, 5120] = [number_of_tokens, 5120]
@@ -205,9 +211,10 @@ class Llama32DecoderLayer(nn.Module):
             hidden_states, residual = self.input_layernorm(hidden_states), hidden_states
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
-            
+        # Get the tokens' relationships from self-attention
         hidden_states_1 = self.self_attn(hidden_states, positions)
         hidden_states_2, residual = self.post_attention_layernorm(hidden_states_1, residual)
+        # Exract the knowledge from the hidden states with MLP
         hidden_states_3 = self.mlp(hidden_states_2)
         
         #if self.layer_id == 0:
