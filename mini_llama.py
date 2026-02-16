@@ -15,6 +15,7 @@ def main():
 
     sampling_params = SamplingParams(temperature=0.7, max_tokens=1024, ignore_eos=False)
 
+    # Don't change the number of prompts, all the comments in the code are based on the batch_size = 3. You can change the content of the prompts, but keep the number of prompts to 3.
     prompt_texts = ["can you help to sum up from 1 to 10?", 
                "list all the prime numbers bweteen 1 and 100?",
                "can you write the first 20 digits of pi?"

@@ -47,6 +47,9 @@ def _expand_kv_heads(k: torch.Tensor, v: torch.Tensor, num_heads_q: int):
 
 def _naive_attention(q, k, v, causal_mask=None, softmax_scale=None):
     """
+    
+    attention(q, k, v) = softmax(q @ k^T * scale + mask) @ v
+    
     最基本的 Scaled Dot-Product Attention。
 
     参数:
@@ -97,7 +100,28 @@ def _naive_attention(q, k, v, causal_mask=None, softmax_scale=None):
 def _build_causal_mask(seq_q: int, seq_k: int, device: torch.device) -> torch.Tensor:
     """
     构建 bottom-right 对齐的 causal mask。
-
+    
+    矩阵的每一行对应一个 Query (q，即当前正在做预测的词)，每一列对应一个 Key (k，即历史上下文中的词)。
+    
+    就是构造一个 max(seq_q, seq_k) x max(seq_q, seq_k) 的矩阵，然后取右下角的 seq_q x seq_k 部分。
+    比如 seq_q=2, seq_k=5 时，先构造 5x5 的矩阵, 从下到上，从右到左取seq_q行和seq_k列：
+    0, 1, 1, 1, 1
+    0, 0, 1, 1, 1
+    0, 0, 0, 1, 1
+    0, 0, 0, 0, 1
+    0, 0, 0, 0, 0
+    
+    比如，对于中文输入 "我想去中国"，假设每个字是一个 token，那么在预测 "中国" 时，Query 是 "中国"，Key 是 "我想去中国"，
+    根据 causal mask 的规则，"中" 可以看到 "我想去中"，但看不到 "国"（因为 "国" 在 "中" 的右边）。
+    所以对应的 mask 矩阵是：
+    
+           K0(我)  K1(想)  K2(去)  K3(中)  K4(国)
+    Q0(我)   0       1       1      1      1
+    Q1(想)   0       0       1      1      1
+    Q2(去)   0       0       0      1      1
+    Q3(中)   0       0       0      0      1
+    Q4(国)   0       0       0      0      0
+    
     Flash Attention 的 causal mask 规则：
         对于 query 位置 i (0-indexed) 和 key 位置 j：
             保留 (False): j - i <= seq_k - seq_q   (即 i + seq_k - seq_q >= j)
@@ -118,6 +142,13 @@ def _build_causal_mask(seq_q: int, seq_k: int, device: torch.device) -> torch.Te
         mask: (seq_q, seq_k) bool, True = 被屏蔽
     =========
     Build a bottom-right aligned causal mask.
+    
+        Example (seq_q=5, seq_k=5):
+    0, 1, 1, 1, 1
+    0, 0, 1, 1, 1
+    0, 0, 0, 1, 1
+    0, 0, 0, 0, 1
+    0, 0, 0, 0, 0
 
     Flash Attention causal mask rule:
         For query position i (0-indexed) and key position j:
@@ -135,22 +166,6 @@ def _build_causal_mask(seq_q: int, seq_k: int, device: torch.device) -> torch.Te
         0 1
         0 0
         
-    Example (seq_q=5, seq_k=5):
-    0, 1, 1, 1, 1
-    0, 0, 1, 1, 1
-    0, 0, 0, 1, 1
-    0, 0, 0, 0, 1
-    0, 0, 0, 0, 0
-    
-    The rule is:
-    make a matrix of shape (seq_q, seq_k)
-    for i < seq_q:
-    for j < seq_k:
-        if j - i <= seq_k - seq_q:
-            mask[i, j] = False
-        else:
-            mask[i, j] = True
-
     Returns:
         mask: (seq_q, seq_k) bool, True = masked
     """
@@ -307,9 +322,9 @@ def flash_attn_varlen_func(
             k_i = k[k_start:k_end]   # (seqlen_k_i, num_kv_heads, head_dim)
             v_i = v[k_start:k_end]
             
-        k_i, v_i = _expand_kv_heads(k_i, v_i, num_heads_q)
+        k_i_e, v_i_e = _expand_kv_heads(k_i, v_i, num_heads_q)
         mask = _build_causal_mask(seqlen_q_i, seqlen_k_i, q.device) if causal else None
-        out_i = _naive_attention(q_i, k_i, v_i, causal_mask=mask, softmax_scale=softmax_scale)
+        out_i = _naive_attention(q_i, k_i_e, v_i_e, causal_mask=mask, softmax_scale=softmax_scale)
         output[q_start:q_end] = out_i
 
     return output
@@ -418,10 +433,10 @@ def flash_attn_with_kvcache(
     Returns:
         output: (batch_size, seqlen_q, num_heads, head_dim)
     """
-    batch_size, seqlen_q, num_heads_q, head_dim = q.shape
-    is_paged = (block_table is not None)
+    batch_size, seqlen_q, num_heads_q, head_dim = q.shape # q.shape = (batch_size = len(sequeces), seqlen_q, num_heads_q, head_dim) = (3, 1, 24, 128)
+    is_paged = (block_table is not None) # not None, block_table.shape = (batch_size, seqlen_q) = (3, 1)
 
-    if cache_seqlens is None:
+    if cache_seqlens is None: # cache_seqlens.shape = (batch_size) = (3)
         if is_paged:
             cache_seqlens = torch.zeros(batch_size, dtype=torch.int32, device=q.device)
         else:
@@ -429,7 +444,7 @@ def flash_attn_with_kvcache(
     elif isinstance(cache_seqlens, int):
         cache_seqlens = torch.full((batch_size,), cache_seqlens, dtype=torch.int32, device=q.device)
 
-    seqlen_new = k.shape[1] if k is not None else 0
+    seqlen_new = k.shape[1] if k is not None else 0 # k is None, seqlen_new = 0
 
     if k is not None and v is not None and seqlen_new > 0:
         for b in range(batch_size):
@@ -461,9 +476,9 @@ def flash_attn_with_kvcache(
             k_b = k_cache[b, :seqlen_k_b]  # (seqlen_k_b, num_kv_heads, head_dim)
             v_b = v_cache[b, :seqlen_k_b]
 
-        k_b, v_b = _expand_kv_heads(k_b, v_b, num_heads_q)
+        k_b_e, v_b_e = _expand_kv_heads(k_b, v_b, num_heads_q)
         mask = _build_causal_mask(seqlen_q, seqlen_k_b, q.device) if causal else None
-        out_b = _naive_attention(q_b, k_b, v_b, causal_mask=mask, softmax_scale=softmax_scale)
+        out_b = _naive_attention(q_b, k_b_e, v_b_e, causal_mask=mask, softmax_scale=softmax_scale)
         output[b] = out_b
 
     return output
